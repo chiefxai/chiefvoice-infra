@@ -71,6 +71,17 @@ Run the commands in this guide from this repository root unless a command explic
   This is a powerful production deploy identity: Terraform manages project IAM bindings, so it receives `roles/resourcemanager.projectIamAdmin`. After the protected Terraform workflow applies, it synchronizes the project, region, WIF provider, Cloud Build service account, and Cloud Build substitutions into `chiefvoice`. Change the DNS A record for `chiefvoice.elvoryx.in` to the new `backend_external_ip`, then run the existing Deploy to GCP workflow manually. That Cloud Build run publishes images in Mumbai, deploys the post-call function in Mumbai, initializes the fresh database, and starts the app. The previous function in `us-central1` is outside this Terraform state and should be removed after confirming the Mumbai deployment works. The current Cloud Build pipeline still builds and serves the console on the VM; it does not deploy the frontend to Vercel.
 - Protect the Terraform remote state: it contains Secret Manager secret versions for the database password, Fernet keys, Vobiz secrets and HMAC object-storage credentials, as well as the rendered startup script. Runtime startup reads values from Secret Manager into root-only files; instance metadata contains secret IDs rather than those values.
 
+## VM sizing
+
+The production VM defaults are configured in `gcp/terraform.tfvars` and supplied to GitHub Actions through the `GCP_TERRAFORM_TFVARS` secret:
+
+```hcl
+vm_machine_type = "e2-standard-2"
+vm_disk_gb      = 50
+```
+
+`e2-standard-2` provides 2 vCPUs and 8 GB of memory. The boot disk is a 50 GB SSD. Set `vm_machine_type` to choose a different predefined Compute Engine size; CPU and memory are selected together by that machine type. Set `vm_disk_gb` to change boot-disk capacity. After changing the secret, run **Apply GCP infrastructure**, inspect the plan, and approve the apply. Google’s [Compute Engine machine type table](https://cloud.google.com/compute/docs/general-purpose-machines#e2_machine_types) lists available sizes.
+
 ## Apply and deploy
 
 ```sh
