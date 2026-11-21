@@ -36,7 +36,8 @@ resource "aws_subnet" "private" {
   availability_zone = data.aws_availability_zones.available.names[0]
   tags = var.tags
 }
-resource "aws_eip" "nat" { domain = "vpc"
+resource "aws_eip" "nat" {
+  domain = "vpc"
   tags = var.tags
 }
 resource "aws_nat_gateway" "main" {
@@ -47,7 +48,8 @@ resource "aws_nat_gateway" "main" {
 }
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
-  route { cidr_block = "0.0.0.0/0"
+  route {
+    cidr_block = "0.0.0.0/0"
     nat_gateway_id = aws_nat_gateway.main.id
   }
   tags = var.tags
@@ -59,7 +61,8 @@ resource "aws_route_table_association" "private" {
 resource "aws_security_group" "lambda" {
   name = "${local.name}-lambda"
   vpc_id = aws_vpc.main.id
-  egress { from_port = 0
+  egress {
+    from_port = 0
     to_port = 0
     protocol = "-1"
     cidr_blocks = ["0.0.0.0/0"]
@@ -69,27 +72,32 @@ resource "aws_security_group" "lambda" {
 resource "aws_security_group" "vm" {
   name = "${local.name}-vm"
   vpc_id = aws_vpc.main.id
-  ingress { from_port = 22
+  ingress {
+    from_port = 22
     to_port = 22
     protocol = "tcp"
     cidr_blocks = [var.ssh_allowed_cidr]
   }
-  ingress { from_port = 80
+  ingress {
+    from_port = 80
     to_port = 80
     protocol = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  ingress { from_port = 443
+  ingress {
+    from_port = 443
     to_port = 443
     protocol = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  ingress { from_port = 5432
+  ingress {
+    from_port = 5432
     to_port = 5432
     protocol = "tcp"
     security_groups = [aws_security_group.lambda.id]
   }
-  egress { from_port = 0
+  egress {
+    from_port = 0
     to_port = 0
     protocol = "-1"
     cidr_blocks = ["0.0.0.0/0"]
@@ -97,7 +105,8 @@ resource "aws_security_group" "vm" {
   tags = var.tags
 }
 
-resource "random_password" "database" { length = 40
+resource "random_password" "database" {
+  length = 40
   special = false
 }
 resource "random_bytes" "app_keys" {
@@ -138,7 +147,8 @@ resource "aws_secretsmanager_secret_version" "lambda_database_url" {
   secret_id = aws_secretsmanager_secret.lambda_database_url.id
   secret_string = "postgresql+asyncpg://${var.database_username}:${urlencode(random_password.database.result)}@${aws_instance.backend.private_ip}:5432/${var.database_name}"
 }
-resource "aws_s3_bucket" "objects" { bucket = var.object_storage_bucket_name
+resource "aws_s3_bucket" "objects" {
+  bucket = var.object_storage_bucket_name
   force_destroy = false
   tags = var.tags
 }
@@ -187,7 +197,8 @@ resource "aws_lambda_function" "post_call" {
     subnet_ids = [aws_subnet.private.id]
     security_group_ids = [aws_security_group.lambda.id]
   }
-  environment { variables = {
+  environment {
+    variables = {
     DATABASE_URL_SECRET_ARN = aws_secretsmanager_secret.lambda_database_url.arn
     POST_CALL_ENCRYPTION_KEY_SECRET_ARN = aws_secretsmanager_secret.runtime["post-call"].arn
     POST_CALL_AGENT_PROVIDER = "langchain_vertex"
@@ -271,7 +282,8 @@ resource "aws_instance" "backend" {
     google_credentials_secret_arn = var.google_credentials_secret_arn
     recordings_enabled = var.recordings_enabled
   })
-  root_block_device { volume_size = var.vm_disk_gb
+  root_block_device {
+    volume_size = var.vm_disk_gb
     volume_type = "gp3"
     encrypted = true
   }
