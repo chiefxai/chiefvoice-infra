@@ -1,0 +1,172 @@
+#!/bin/bash
+set -euo pipefail
+exec > >(tee -a /var/log/chiefvoice-bootstrap.log) 2>&1
+
+apt-get update
+apt-get install -y docker.io docker-compose-v2 awscli jq util-linux
+systemctl enable --now docker
+mkdir -p /opt/chiefvoice /opt/chiefvoice/credentials
+chmod 700 /opt/chiefvoice/credentials
+
+aws ecr get-login-password --region ${aws_region} \
+  | docker login --username AWS --password-stdin ${api_registry}
+aws secretsmanager get-secret-value \
+  --secret-id ${google_credentials_secret_arn} \
+  --query SecretString --output text \
+  > /opt/chiefvoice/credentials/google-service-account.json
+chmod 600 /opt/chiefvoice/credentials/google-service-account.json
+
+get_secret() {
+  aws secretsmanager get-secret-value --secret-id "$1" --query SecretString --output text
+}
+database_password="$(get_secret '${secret_arns["database"]}')"
+credentials_key="$(get_secret '${secret_arns["credentials"]}')"
+post_call_key="$(get_secret '${secret_arns["post-call"]}')"
+recording_key="$(get_secret '${secret_arns["recordings"]}')"
+backup_key="$(get_secret '${secret_arns["backup"]}')"
+vobiz_webhook_secret="$(get_secret '${secret_arns["vobiz-webhook"]}')"
+vobiz_route_token="$(get_secret '${secret_arns["vobiz-route"]}')"
+
+cat >/opt/chiefvoice/Caddyfile <<'EOF'
+${public_domain} {
+  encode zstd gzip
+  reverse_proxy api:8080
+}
+EOF
+
+cat >/opt/chiefvoice/.env <<'EOF'
+API_IMAGE=${api_image_uri}
+EOF
+cat >>/opt/chiefvoice/.env <<EOF
+DB_PASSWORD=$database_password
+CREDENTIALS_ENCRYPTION_KEY=$credentials_key
+POST_CALL_ENCRYPTION_KEY=$post_call_key
+RECORDINGS_ENCRYPTION_KEY=$recording_key
+BACKUP_ENCRYPTION_KEY=$backup_key
+VOBIZ_WEBHOOK_SECRET=$vobiz_webhook_secret
+VOBIZ_INBOUND_ROUTE_TOKEN=$vobiz_route_token
+EOF
+chmod 600 /opt/chiefvoice/.env
+unset database_password credentials_key post_call_key recording_key backup_key vobiz_webhook_secret vobiz_route_token
+
+cat >/opt/chiefvoice/compose.yaml <<'EOF'
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${database_name}
+      POSTGRES_USER: ${database_username}
+      POSTGRES_PASSWORD: $${DB_PASSWORD}
+    ports: ["5432:5432"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${database_username} -d ${database_name}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  api:
+    image: $${API_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose: ["8080"]
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+asyncpg://${database_username}:$${DB_PASSWORD}@postgres:5432/${database_name}
+      OIDC_ISSUER: ${oidc_issuer}
+      OIDC_AUDIENCE: ${oidc_audience}
+      OIDC_JWKS_URL: ${oidc_jwks_url}
+      PLATFORM_ADMIN_SUBJECTS: ${platform_admin_subjects}
+      REALTIME_AGENT_PROVIDER: vertex
+      VERTEX_PROJECT_ISOLATION_ENABLED: "true"
+      VERTEX_LOCATION: ${vertex_location}
+      VERTEX_MODEL: ${vertex_model}
+      VERTEX_CREDENTIALS_PATH: /opt/credentials/google-service-account.json
+      GCP_PROJECT_PARENT: ${gcp_project_parent}
+      GCP_BILLING_ACCOUNT_ID: ${gcp_billing_account_id}
+      GCP_RUNTIME_SERVICE_ACCOUNT: ${gcp_runtime_service_account}
+      GCP_BUDGET_API_PROJECT_ID: ${gcp_budget_api_project_id}
+      GCP_VERTEX_MONTHLY_SPEND_CAP: ${gcp_vertex_monthly_spend_cap}
+      POST_CALL_AGENT_PROVIDER: langchain_vertex
+      POST_CALL_MODEL: ${post_call_model}
+      POST_CALL_LOCATION: ${post_call_location}
+      POST_CALL_EXECUTION_BACKEND: sqs
+      POST_CALL_SQS_QUEUE_URL: ${queue_url}
+      CREDENTIALS_ENCRYPTION_KEY: $${CREDENTIALS_ENCRYPTION_KEY}
+      POST_CALL_ENCRYPTION_KEY: $${POST_CALL_ENCRYPTION_KEY}
+      RECORDINGS_ENABLED: "${recordings_enabled}"
+      RECORDINGS_STORAGE_BACKEND: s3
+      RECORDINGS_ENCRYPTION_KEY: $${RECORDINGS_ENCRYPTION_KEY}
+      BACKUP_STORAGE_BACKEND: s3
+      BACKUP_ENCRYPTION_KEY: $${BACKUP_ENCRYPTION_KEY}
+      BACKUP_POLICIES_JSON: '[{"scope":"service","resource":"postgres","interval_seconds":86400,"retain_for_seconds":2592000,"encryption_required":true}]'
+      BACKUP_INTERVAL_SECONDS: "3600"
+      BACKUP_DIRECTORY: /var/lib/chiefvoice/backups
+      OBJECT_STORAGE_BUCKET: ${object_bucket}
+      OBJECT_STORAGE_REGION: ${aws_region}
+      OBJECT_STORAGE_PREFIX: chiefvoice
+      VOBIZ_PUBLIC_URL: https://${public_domain}
+      VOBIZ_WEBHOOK_SECRET: $${VOBIZ_WEBHOOK_SECRET}
+      VOBIZ_INBOUND_ROUTE_TOKEN: $${VOBIZ_INBOUND_ROUTE_TOKEN}
+    volumes:
+      - /opt/chiefvoice/credentials:/opt/credentials:ro
+      - api_backups:/var/lib/chiefvoice/backups
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [api]
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - /opt/chiefvoice/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+volumes:
+  postgres_data:
+  api_backups:
+  caddy_data:
+  caddy_config:
+EOF
+
+cat >/usr/local/bin/chiefvoice-deploy <<'EOF'
+#!/bin/bash
+set -euo pipefail
+image="$${1:?usage: chiefvoice-deploy IMAGE_URI}"
+cd /opt/chiefvoice
+exec 9>/var/lock/chiefvoice-deploy.lock
+flock 9
+registry="$${image%%/*}"
+aws ecr get-login-password --region ${aws_region} | docker login --username AWS --password-stdin "$${registry}"
+sed -i '/^API_IMAGE=/d' .env
+printf 'API_IMAGE=%s\n' "$${image}" >>.env
+docker compose run --rm api alembic upgrade head
+docker compose up -d --pull always api caddy
+EOF
+chmod 750 /usr/local/bin/chiefvoice-deploy
+
+cat >/usr/local/bin/chiefvoice-backup-restore-check <<'EOF'
+#!/bin/bash
+set -euo pipefail
+if [ "$${EUID}" -ne 0 ]; then echo "run with sudo" >&2; exit 2; fi
+target_db="$${1:-chiefvoice_restore_check}"
+if [[ ! "$${target_db}" =~ ^[a-zA-Z_][a-zA-Z0-9_]{0,62}$ ]]; then echo "invalid disposable database name" >&2; exit 2; fi
+cd /opt/chiefvoice
+set -a
+. ./.env
+set +a
+docker compose exec -T postgres createdb -U ${database_username} "$${target_db}"
+target_url="postgresql+asyncpg://${database_username}:$DB_PASSWORD@postgres:5432/$${target_db}"
+trap 'docker compose -f /opt/chiefvoice/compose.yaml exec -T postgres dropdb -U ${database_username} --if-exists "$${target_db}"' EXIT
+docker compose exec -T -e RESTORE_TARGET_DATABASE_URL="$${target_url}" api python scripts/verify_postgres_backup_restore.py
+EOF
+chmod 750 /usr/local/bin/chiefvoice-backup-restore-check
+
+cd /opt/chiefvoice
+docker compose up -d postgres
+until [ "$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q postgres)")" = "healthy" ]; do sleep 2; done
+exec 9>/var/lock/chiefvoice-deploy.lock
+flock 9
+docker compose run --rm api alembic upgrade head
+docker compose up -d api caddy

@@ -20,3 +20,14 @@ jobs:
       - name: Format and validate GCP Terraform
         working-directory: gcp
         run: terraform fmt -recursive && terraform init -backend=false -input=false && terraform validate
+  validate-aws:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+      - name: Format and validate AWS Terraform
+        working-directory: aws
+        run: terraform fmt -recursive && terraform init -backend=false -input=false && terraform validate
