@@ -204,15 +204,16 @@ resource "aws_lambda_function" "post_call" {
   }
   environment {
     variables = {
-    DATABASE_URL_SECRET_ARN = aws_secretsmanager_secret.lambda_database_url.arn
-    POST_CALL_ENCRYPTION_KEY_SECRET_ARN = aws_secretsmanager_secret.runtime["post-call"].arn
-    POST_CALL_AGENT_PROVIDER = "langchain_vertex"
-    VERTEX_PROJECT_ISOLATION_ENABLED = "true"
-    VERTEX_LOCATION = var.vertex_location
-    POST_CALL_MODEL = var.post_call_model
-    POST_CALL_LOCATION = var.post_call_location
-    GOOGLE_CREDENTIALS_SECRET_ARN = var.google_credentials_secret_arn
-  } }
+      DATABASE_URL_SECRET_ARN = aws_secretsmanager_secret.lambda_database_url.arn
+      POST_CALL_ENCRYPTION_KEY_SECRET_ARN = aws_secretsmanager_secret.runtime["post-call"].arn
+      POST_CALL_AGENT_PROVIDER = "langchain_vertex"
+      VERTEX_PROJECT_ISOLATION_ENABLED = "true"
+      VERTEX_LOCATION = var.vertex_location
+      POST_CALL_MODEL = var.post_call_model
+      POST_CALL_LOCATION = var.post_call_location
+      GOOGLE_CREDENTIALS_SECRET_ARN = var.google_credentials_secret_arn
+    }
+  }
   depends_on = [aws_secretsmanager_secret_version.lambda_database_url]
 }
 resource "aws_lambda_event_source_mapping" "post_call" {
