@@ -161,9 +161,14 @@ resource "aws_s3_bucket_public_access_block" "objects" {
 }
 resource "aws_s3_bucket_server_side_encryption_configuration" "objects" {
   bucket = aws_s3_bucket.objects.id
-  rule { apply_server_side_encryption_by_default { sse_algorithm = "AES256" } }
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
 }
-resource "aws_sqs_queue" "post_call_dlq" { name = "${local.name}-post-call-dlq"
+resource "aws_sqs_queue" "post_call_dlq" {
+  name = "${local.name}-post-call-dlq"
   message_retention_seconds = 1209600
 }
 resource "aws_sqs_queue" "post_call" {
