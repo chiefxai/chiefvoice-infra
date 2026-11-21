@@ -141,6 +141,15 @@ jobs:
       - name: Check out main
         uses: actions/checkout@v7
 
+      - name: Validate deployment config sync token
+        env:
+          CHIEFVOICE_REPO_VARIABLES_TOKEN: ${{ secrets.CHIEFVOICE_REPO_VARIABLES_TOKEN }}
+        run: |
+          if [[ -z "${CHIEFVOICE_REPO_VARIABLES_TOKEN:-}" ]]; then
+            echo "Missing production environment secret: CHIEFVOICE_REPO_VARIABLES_TOKEN" >&2
+            exit 1
+          fi
+
       - name: Authenticate to Google Cloud with Workload Identity Federation
         uses: google-github-actions/auth@v3
         with:
@@ -185,6 +194,24 @@ jobs:
       - name: Apply reviewed regional migration
         working-directory: gcp
         run: terraform apply -input=false -auto-approve "$RUNNER_TEMP/chiefvoice-mumbai.tfplan"
+
+      - name: Sync Terraform outputs to chiefvoice
+        working-directory: gcp
+        env:
+          CHIEFVOICE_REPO_VARIABLES_TOKEN: ${{ secrets.CHIEFVOICE_REPO_VARIABLES_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "${CHIEFVOICE_REPO_VARIABLES_TOKEN:-}" ]]; then
+            echo "Missing production environment secret: CHIEFVOICE_REPO_VARIABLES_TOKEN" >&2
+            exit 1
+          fi
+          terraform output -json cloud_build_substitutions > "$RUNNER_TEMP/cloudbuild-substitutions.json"
+          GCP_PROJECT_ID="$(terraform output -raw project_id)" \
+          GCP_REGION="$(terraform output -raw region)" \
+          GCP_WORKLOAD_IDENTITY_PROVIDER="$(terraform output -raw github_workload_identity_provider)" \
+          GCP_CLOUD_BUILD_SERVICE_ACCOUNT="$(terraform output -raw cloud_build_service_account)" \
+          CLOUDBUILD_SUBSTITUTIONS_FILE="$RUNNER_TEMP/cloudbuild-substitutions.json" \
+          python ../scripts/sync_chiefvoice_deployment_config.py
 
       - name: Publish new VM IP and next steps
         working-directory: gcp

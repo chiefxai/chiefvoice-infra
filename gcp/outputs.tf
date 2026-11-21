@@ -1,5 +1,7 @@
 output "backend_external_ip" { value = google_compute_address.backend.address }
 output "backend_https_url" { value = "https://${var.public_domain}" }
+output "project_id" { value = var.project_id }
+output "region" { value = var.region }
 output "artifact_registry_repository" { value = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.images.repository_id}" }
 output "post_call_tasks_queue" { value = google_cloud_tasks_queue.post_call.id }
 output "post_call_task_invoker_service_account" { value = google_service_account.task_invoker.email }
