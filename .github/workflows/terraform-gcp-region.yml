@@ -1,0 +1,199 @@
+name: Migrate GCP backend to Mumbai
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_data_discard:
+        description: Confirm that the old VM, recordings, backups, and queued tasks may be deleted
+        type: choice
+        required: true
+        default: "no"
+        options:
+          - "no"
+          - "yes"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: chiefvoice-gcp-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  plan-migration:
+    if: github.ref == 'refs/heads/main' && inputs.confirm_data_discard == 'yes'
+    name: Plan complete Mumbai migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_TF_STATE_BUCKET: ${{ vars.GCP_TF_STATE_BUCKET }}
+      GCP_TF_STATE_PREFIX: ${{ vars.GCP_TF_STATE_PREFIX }}
+      TF_IN_AUTOMATION: "1"
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v7
+
+      - name: Validate deployment settings
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for name in GCP_PROJECT_ID GCP_WORKLOAD_IDENTITY_PROVIDER GCP_TF_STATE_BUCKET GCP_TF_STATE_PREFIX; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing GitHub repository variable: ${name}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Authenticate to Google Cloud with Workload Identity Federation
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: chiefvoice-github-deploy@chief-502717.iam.gserviceaccount.com
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+
+      - name: Prepare Terraform inputs
+        shell: bash
+        env:
+          TERRAFORM_TFVARS: ${{ secrets.GCP_TERRAFORM_TFVARS }}
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "${TERRAFORM_TFVARS:-}" ]]; then
+            echo "Missing production environment secret: GCP_TERRAFORM_TFVARS" >&2
+            exit 1
+          fi
+          printf '%s' "$TERRAFORM_TFVARS" > "$RUNNER_TEMP/terraform.tfvars"
+          chmod 600 "$RUNNER_TEMP/terraform.tfvars"
+
+      - name: Initialize Terraform remote state
+        working-directory: gcp
+        run: >-
+          terraform init -input=false
+          -backend-config="bucket=${GCP_TF_STATE_BUCKET}"
+          -backend-config="prefix=${GCP_TF_STATE_PREFIX}"
+
+      - name: Create complete regional migration plan
+        working-directory: gcp
+        run: >-
+          terraform plan -input=false
+          -var-file="$RUNNER_TEMP/terraform.tfvars"
+          -out="$RUNNER_TEMP/chiefvoice-mumbai.tfplan"
+
+      - name: Summarize planned resource actions
+        working-directory: gcp
+        run: |
+          terraform show -json "$RUNNER_TEMP/chiefvoice-mumbai.tfplan" | python -c '
+          import json, sys
+          plan = json.load(sys.stdin)
+          print("## Mumbai migration plan\n")
+          for resource in plan.get("resource_changes", []):
+              address = resource.get("address", "unknown")
+              actions = ", ".join(resource.get("change", {}).get("actions", []))
+              print(f"- `{address}`: {actions}")
+          ' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Encrypt the plan artifact
+        shell: bash
+        env:
+          TF_PLAN_ENCRYPTION_KEY: ${{ secrets.GCP_TF_PLAN_ENCRYPTION_KEY }}
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "${TF_PLAN_ENCRYPTION_KEY:-}" ]]; then
+            echo "Missing repository secret: GCP_TF_PLAN_ENCRYPTION_KEY" >&2
+            exit 1
+          fi
+          gpg --batch --yes --pinentry-mode loopback --symmetric --cipher-algo AES256 \
+            --passphrase "$TF_PLAN_ENCRYPTION_KEY" \
+            --output "$RUNNER_TEMP/chiefvoice-mumbai.tfplan.gpg" \
+            "$RUNNER_TEMP/chiefvoice-mumbai.tfplan"
+          rm -f "$RUNNER_TEMP/chiefvoice-mumbai.tfplan"
+
+      - name: Store exact plan for the approved apply
+        uses: actions/upload-artifact@v4
+        with:
+          name: chiefvoice-mumbai-tfplan-${{ github.run_id }}
+          path: ${{ runner.temp }}/chiefvoice-mumbai.tfplan.gpg
+          retention-days: 1
+          if-no-files-found: error
+
+  apply-migration:
+    if: github.ref == 'refs/heads/main' && inputs.confirm_data_discard == 'yes'
+    name: Apply approved Mumbai migration
+    needs: plan-migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_TF_STATE_BUCKET: ${{ vars.GCP_TF_STATE_BUCKET }}
+      GCP_TF_STATE_PREFIX: ${{ vars.GCP_TF_STATE_PREFIX }}
+      TF_IN_AUTOMATION: "1"
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v7
+
+      - name: Authenticate to Google Cloud with Workload Identity Federation
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: chiefvoice-github-deploy@chief-502717.iam.gserviceaccount.com
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+
+      - name: Initialize Terraform remote state
+        working-directory: gcp
+        run: >-
+          terraform init -input=false
+          -backend-config="bucket=${GCP_TF_STATE_BUCKET}"
+          -backend-config="prefix=${GCP_TF_STATE_PREFIX}"
+
+      - name: Download reviewed plan
+        uses: actions/download-artifact@v4
+        with:
+          name: chiefvoice-mumbai-tfplan-${{ github.run_id }}
+          path: ${{ runner.temp }}
+
+      - name: Decrypt reviewed plan
+        shell: bash
+        env:
+          TF_PLAN_ENCRYPTION_KEY: ${{ secrets.GCP_TF_PLAN_ENCRYPTION_KEY }}
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "${TF_PLAN_ENCRYPTION_KEY:-}" ]]; then
+            echo "Missing repository secret: GCP_TF_PLAN_ENCRYPTION_KEY" >&2
+            exit 1
+          fi
+          gpg --batch --yes --pinentry-mode loopback \
+            --passphrase "$TF_PLAN_ENCRYPTION_KEY" \
+            --output "$RUNNER_TEMP/chiefvoice-mumbai.tfplan" \
+            --decrypt "$RUNNER_TEMP/chiefvoice-mumbai.tfplan.gpg"
+
+      - name: Apply reviewed regional migration
+        working-directory: gcp
+        run: terraform apply -input=false -auto-approve "$RUNNER_TEMP/chiefvoice-mumbai.tfplan"
+
+      - name: Publish new VM IP and next steps
+        working-directory: gcp
+        run: |
+          ip="$(terraform output -raw backend_external_ip)"
+          {
+            echo "## Mumbai backend provisioned"
+            echo
+            echo "New static IP: `$ip`"
+            echo
+            echo "Update the DNS A record for `chiefvoice.elvoryx.in` to this IP. Then run the existing Deploy to GCP workflow to build and deploy the API, console, and post-call function onto the fresh VM/database."
+          } >> "$GITHUB_STEP_SUMMARY"

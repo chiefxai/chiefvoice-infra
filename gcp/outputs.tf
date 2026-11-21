@@ -1,0 +1,54 @@
+output "backend_external_ip" { value = google_compute_address.backend.address }
+output "backend_https_url" { value = "https://${var.public_domain}" }
+output "artifact_registry_repository" { value = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.images.repository_id}" }
+output "post_call_tasks_queue" { value = google_cloud_tasks_queue.post_call.id }
+output "post_call_task_invoker_service_account" { value = google_service_account.task_invoker.email }
+output "functions_vpc_connector" { value = google_vpc_access_connector.functions.name }
+output "object_storage_bucket" { value = google_storage_bucket.objects.name }
+output "object_storage_endpoint" { value = "https://storage.googleapis.com" }
+output "object_storage_signing_region" { value = "auto" }
+output "vm_backend_service_account" { value = google_service_account.backend.email }
+output "post_call_function_service_account" { value = google_service_account.post_call_function.email }
+output "cloud_build_service_account" { value = google_service_account.cloud_build.email }
+output "cloud_build_substitutions" {
+  description = "Custom Cloud Build substitutions derived from this environment's Terraform resources and variables."
+  value = {
+    _REGION                            = var.region
+    _AR_REPOSITORY                     = google_artifact_registry_repository.images.repository_id
+    _IMAGE_NAME                        = "api"
+    _VM_NAME                           = google_compute_instance.backend.name
+    _ZONE                              = var.zone
+    _PUBLIC_DOMAIN                     = var.public_domain
+    _FUNCTION_NAME                     = "chiefvoice-post-call"
+    _FUNCTION_REGION                   = google_vpc_access_connector.functions.region
+    _FUNCTION_VPC_CONNECTOR            = google_vpc_access_connector.functions.name
+    _FUNCTION_SERVICE_ACCOUNT          = google_service_account.post_call_function.email
+    _FUNCTION_BUILD_SERVICE_ACCOUNT    = google_service_account.function_build.name
+    _TASK_INVOKER_SERVICE_ACCOUNT      = google_service_account.task_invoker.email
+    _POST_CALL_FUNCTION_MAX_INSTANCES  = "10"
+    _DATABASE_URL_SECRET               = google_secret_manager_secret.function_database_url.secret_id
+    _CREDENTIALS_ENCRYPTION_KEY_SECRET = google_secret_manager_secret.vm_runtime["credentials"].secret_id
+    _POST_CALL_ENCRYPTION_KEY_SECRET   = google_secret_manager_secret.post_call_key.secret_id
+    _RECORDINGS_ENCRYPTION_KEY_SECRET    = google_secret_manager_secret.vm_runtime["recordings"].secret_id
+    _OBJECT_STORAGE_ACCESS_KEY_ID_SECRET = google_secret_manager_secret.vm_runtime["object-access-id"].secret_id
+    _OBJECT_STORAGE_SECRET_ACCESS_KEY_SECRET = google_secret_manager_secret.vm_runtime["object-secret"].secret_id
+    _OBJECT_STORAGE_BUCKET             = google_storage_bucket.objects.name
+    _VERTEX_LOCATION                   = var.vertex_location
+    _POST_CALL_LOCATION                = var.post_call_location
+    _POST_CALL_MODEL                   = var.post_call_model
+    _POST_CALL_TRANSCRIPTION_LOCATION  = var.post_call_transcription_location
+    _POST_CALL_TRANSCRIPTION_MODEL     = var.post_call_transcription_model
+    _OIDC_AUDIENCE                     = var.oidc_audience
+    _OIDC_AUTHORITY                    = var.oidc_authority
+    _OIDC_CLIENT_ID                    = var.oidc_client_id
+    _OIDC_SCOPE                        = var.oidc_scope
+    _OIDC_ISSUER                       = var.oidc_issuer
+    _OIDC_JWKS_URL                     = var.oidc_jwks_url
+    _OIDC_TENANT_CLAIM                 = var.oidc_tenant_claim
+    _PLATFORM_ADMIN_SUBJECTS           = join(",", var.platform_admin_subjects)
+  }
+}
+output "github_deploy_service_account" { value = google_service_account.github_deploy.email }
+output "github_workload_identity_provider" {
+  value = "projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/providers/${google_iam_workload_identity_pool_provider.github.workload_identity_pool_provider_id}"
+}

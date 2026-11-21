@@ -1,0 +1,20 @@
+services:
+  gcloud:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+    entrypoint: ["gcloud"]
+    environment:
+      CLOUDSDK_CONFIG: /root/.config/gcloud
+    volumes:
+      - ../.gcloud:/root/.config/gcloud
+
+  terraform:
+    image: hashicorp/terraform:1.10.5
+    entrypoint: ["terraform"]
+    working_dir: /workspace
+    environment:
+      CLOUDSDK_CONFIG: /root/.config/gcloud
+      GOOGLE_APPLICATION_CREDENTIALS: /root/.config/gcloud/application_default_credentials.json
+      TF_IN_AUTOMATION: "1"
+    volumes:
+      - .:/workspace
+      - ../.gcloud:/root/.config/gcloud:ro

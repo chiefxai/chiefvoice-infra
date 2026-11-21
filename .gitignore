@@ -1,0 +1,10 @@
+# Terraform working data and secrets
+**/.terraform/**
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.gpg
+**/terraform.tfvars
+**/terraform.tfvars.json
+**/backend.hcl
+.gcloud/
