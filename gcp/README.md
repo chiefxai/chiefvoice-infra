@@ -137,6 +137,7 @@ terraform -chdir=gcp output -raw project_id
 terraform -chdir=gcp output -raw project_number
 terraform -chdir=gcp output -raw region
 terraform -chdir=gcp output -raw github_deploy_service_account
+terraform -chdir=gcp output -raw github_infra_terraform_service_account
 terraform -chdir=gcp output -raw github_workload_identity_provider
 terraform -chdir=gcp output -raw cloud_build_service_account
 ```
@@ -149,14 +150,14 @@ In `chiefxai/chiefvoice-infra`, configure repository Actions variables:
 
 - `GCP_PROJECT_ID` = `chiefvoice-service`
 - `GCP_REGION` = `asia-south1`
-- `GCP_GITHUB_DEPLOY_SERVICE_ACCOUNT` = Terraform output `github_deploy_service_account`
+- `GCP_INFRA_TERRAFORM_SERVICE_ACCOUNT` = Terraform output `github_infra_terraform_service_account`
 - `GCP_WORKLOAD_IDENTITY_PROVIDER` = Terraform output `github_workload_identity_provider`
 - `GCP_TF_STATE_BUCKET` = the verified state bucket name
 - `GCP_TF_STATE_PREFIX` = `chiefvoice/prod`
 
 Configure repository secrets `GCP_TERRAFORM_TFVARS` (the reviewed Terraform variables file) and `GCP_TF_PLAN_ENCRYPTION_KEY`. In the protected `production` environment, configure required reviewers and secret `CHIEFVOICE_REPO_VARIABLES_TOKEN`, a fine-grained token limited to `chiefxai/chiefvoice` with Actions Variables write permission. Never print or commit these secrets.
 
-The sync workflow reads Terraform outputs and writes these six non-secret repository variables to `chiefxai/chiefvoice`: `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_GITHUB_DEPLOY_SERVICE_ACCOUNT`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_CLOUD_BUILD_SERVICE_ACCOUNT`, and `GCP_CLOUDBUILD_SUBSTITUTIONS_JSON`. It validates all values before its first GitHub API write. It is restricted to the infrastructure repository’s `main` branch.
+The sync workflow authenticates to GCP using `GCP_INFRA_TERRAFORM_SERVICE_ACCOUNT`, then reads Terraform outputs and writes six non-secret variables to `chiefxai/chiefvoice`: `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_GITHUB_DEPLOY_SERVICE_ACCOUNT`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_CLOUD_BUILD_SERVICE_ACCOUNT`, and `GCP_CLOUDBUILD_SUBSTITUTIONS_JSON`. The app deployment variable is sourced only from `github_deploy_service_account`; the Terraform service account is never sent to the app repository. The workflow validates all values before its first GitHub API write and is restricted to the infrastructure repository’s `main` branch.
 
 ## 7. Plan, apply, and deploy
 

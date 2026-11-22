@@ -102,6 +102,25 @@ resource "google_storage_bucket" "objects" {
   force_destroy               = false
   labels                      = var.labels
 
+  lifecycle_rule {
+    action {
+      type = "Delete"
+    }
+    condition {
+      with_state         = "ARCHIVED"
+      num_newer_versions = 5
+    }
+  }
+
+  lifecycle_rule {
+    action {
+      type = "Delete"
+    }
+    condition {
+      days_since_noncurrent_time = 50
+    }
+  }
+
   lifecycle {
     prevent_destroy = true
   }
@@ -133,6 +152,10 @@ resource "google_service_account" "cloud_build" {
 resource "google_service_account" "github_deploy" {
   account_id   = "chiefvoice-github-deploy"
   display_name = "Chiefvoice GitHub Actions Cloud Build submitter"
+}
+resource "google_service_account" "github_infra_terraform" {
+  account_id   = "chiefvoice-terraform"
+  display_name = "Chiefvoice GitHub Actions Terraform manager"
 }
 data "google_project" "current" {
   project_id = var.project_id
@@ -174,7 +197,7 @@ resource "google_service_account_iam_member" "github_deploy_wif" {
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_repository}"
 }
 resource "google_service_account_iam_member" "github_infra_wif" {
-  service_account_id = google_service_account.github_deploy.name
+  service_account_id = google_service_account.github_infra_terraform.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_infra_repository}"
 }
@@ -188,12 +211,7 @@ resource "google_project_iam_member" "github_deploy_service_usage" {
   role    = "roles/serviceusage.serviceUsageConsumer"
   member  = "serviceAccount:${google_service_account.github_deploy.email}"
 }
-resource "google_project_iam_member" "github_deploy_cloudbuild_bucket_lister" {
-  project = var.project_id
-  role    = "roles/storage.bucketViewer"
-  member  = "serviceAccount:${google_service_account.github_deploy.email}"
-}
-resource "google_project_iam_member" "github_deploy_terraform_roles" {
+resource "google_project_iam_member" "github_infra_terraform_roles" {
   for_each = toset([
     "roles/artifactregistry.admin",
     "roles/cloudtasks.admin",
@@ -208,17 +226,17 @@ resource "google_project_iam_member" "github_deploy_terraform_roles" {
   ])
   project = var.project_id
   role    = each.value
-  member  = "serviceAccount:${google_service_account.github_deploy.email}"
+  member  = "serviceAccount:${google_service_account.github_infra_terraform.email}"
 }
-resource "google_service_account_iam_member" "github_deploy_backend_act_as" {
+resource "google_service_account_iam_member" "github_infra_terraform_backend_act_as" {
   service_account_id = google_service_account.backend.name
   role               = "roles/iam.serviceAccountUser"
-  member             = "serviceAccount:${google_service_account.github_deploy.email}"
+  member             = "serviceAccount:${google_service_account.github_infra_terraform.email}"
 }
-resource "google_storage_bucket_iam_member" "github_deploy_terraform_state" {
+resource "google_storage_bucket_iam_member" "github_infra_terraform_state" {
   bucket = var.terraform_state_bucket_name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.github_deploy.email}"
+  member = "serviceAccount:${google_service_account.github_infra_terraform.email}"
 }
 resource "google_storage_bucket" "cloudbuild_source" {
   name                        = "${var.project_id}_cloudbuild"

@@ -28,7 +28,7 @@ jobs:
     timeout-minutes: 30
     env:
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-      GCP_GITHUB_DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_GITHUB_DEPLOY_SERVICE_ACCOUNT }}
+      GCP_INFRA_TERRAFORM_SERVICE_ACCOUNT: ${{ vars.GCP_INFRA_TERRAFORM_SERVICE_ACCOUNT }}
       GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
       GCP_TF_STATE_BUCKET: ${{ vars.GCP_TF_STATE_BUCKET }}
       GCP_TF_STATE_PREFIX: ${{ vars.GCP_TF_STATE_PREFIX }}
@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          for name in GCP_PROJECT_ID GCP_GITHUB_DEPLOY_SERVICE_ACCOUNT GCP_WORKLOAD_IDENTITY_PROVIDER GCP_TF_STATE_BUCKET GCP_TF_STATE_PREFIX; do
+          for name in GCP_PROJECT_ID GCP_INFRA_TERRAFORM_SERVICE_ACCOUNT GCP_WORKLOAD_IDENTITY_PROVIDER GCP_TF_STATE_BUCKET GCP_TF_STATE_PREFIX; do
             if [[ -z "${!name:-}" ]]; then
               echo "Missing GitHub repository variable: ${name}" >&2
               exit 1
@@ -76,7 +76,7 @@ jobs:
         with:
           project_id: ${{ vars.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_GITHUB_DEPLOY_SERVICE_ACCOUNT }}
+          service_account: ${{ vars.GCP_INFRA_TERRAFORM_SERVICE_ACCOUNT }}
 
       - uses: hashicorp/setup-terraform@v4
         with:
@@ -138,7 +138,7 @@ jobs:
     environment: production
     env:
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-      GCP_GITHUB_DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_GITHUB_DEPLOY_SERVICE_ACCOUNT }}
+      GCP_INFRA_TERRAFORM_SERVICE_ACCOUNT: ${{ vars.GCP_INFRA_TERRAFORM_SERVICE_ACCOUNT }}
       GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
       GCP_TF_STATE_BUCKET: ${{ vars.GCP_TF_STATE_BUCKET }}
       GCP_TF_STATE_PREFIX: ${{ vars.GCP_TF_STATE_PREFIX }}
@@ -160,7 +160,7 @@ jobs:
         with:
           project_id: ${{ vars.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_GITHUB_DEPLOY_SERVICE_ACCOUNT }}
+          service_account: ${{ vars.GCP_INFRA_TERRAFORM_SERVICE_ACCOUNT }}
 
       - uses: hashicorp/setup-terraform@v4
         with:
