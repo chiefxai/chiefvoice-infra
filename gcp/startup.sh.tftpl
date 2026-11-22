@@ -34,8 +34,6 @@ recording_key="$(fetch_secret '${secret_ids["recordings"]}')"
 backup_key="$(fetch_secret '${secret_ids["backup"]}')"
 vobiz_webhook_secret="$(fetch_secret '${secret_ids["vobiz-webhook"]}')"
 vobiz_route_token="$(fetch_secret '${secret_ids["vobiz-route"]}')"
-object_access_id="$(fetch_secret '${secret_ids["object-access-id"]}')"
-object_secret="$(fetch_secret '${secret_ids["object-secret"]}')"
 cat >/opt/chiefvoice/.env <<ENVFILE
 DB_PASSWORD=$database_password
 ENVFILE
@@ -112,18 +110,14 @@ POST_CALL_ENCRYPTION_KEY=$post_call_key
 RECORDINGS_ENCRYPTION_KEY=$recording_key
 BACKUP_ENCRYPTION_KEY=$backup_key
 RECORDINGS_ENABLED=true
-RECORDINGS_STORAGE_BACKEND=s3
 BACKUP_DIRECTORY=/tmp/chiefvoice-backups
-BACKUP_STORAGE_BACKEND=s3
 BACKUP_POLICIES_JSON=[{"scope":"service","resource":"postgres","interval_seconds":86400,"retain_for_seconds":2592000,"encryption_required":true}]
 BACKUP_INTERVAL_SECONDS=3600
 RETENTION_POLICIES_JSON=[]
 OBJECT_STORAGE_BUCKET=${object_bucket}
-OBJECT_STORAGE_REGION=auto
-OBJECT_STORAGE_ENDPOINT_URL=https://storage.googleapis.com
-OBJECT_STORAGE_ADDRESSING_STYLE=path
-OBJECT_STORAGE_ACCESS_KEY_ID=$object_access_id
-OBJECT_STORAGE_SECRET_ACCESS_KEY=$object_secret
+OBJECT_STORAGE_PROVIDER=gcs
+RECORDINGS_STORAGE_BACKEND=gcs
+BACKUP_STORAGE_BACKEND=gcs
 OBJECT_STORAGE_PREFIX=chiefvoice
 POST_CALL_EXECUTION_BACKEND=gcp_cloud_tasks
 POST_CALL_CLOUD_TASKS_QUEUE=${tasks_queue}
@@ -148,7 +142,7 @@ VOBIZ_INBOUND_ROUTE_TOKEN=$vobiz_route_token
 OTEL_SERVICE_NAME=chiefvoice-api
 ENV
 chmod 600 /opt/chiefvoice/api.env
-unset database_password credentials_key post_call_key recording_key backup_key vobiz_webhook_secret vobiz_route_token object_access_id object_secret
+unset database_password credentials_key post_call_key recording_key backup_key vobiz_webhook_secret vobiz_route_token
 
 cat >/usr/local/bin/chiefvoice-deploy <<'DEPLOY'
 #!/bin/bash
