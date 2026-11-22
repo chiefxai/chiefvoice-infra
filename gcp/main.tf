@@ -29,7 +29,7 @@ resource "random_password" "vobiz_secrets" {
   special  = false
 }
 locals {
-  vm_secret_names = toset(["database", "credentials", "post-call", "recordings", "backup", "vobiz-webhook", "vobiz-route", "object-access-id", "object-secret"])
+  vm_secret_names = toset(["database", "credentials", "post-call", "recordings", "backup", "vobiz-webhook", "vobiz-route"])
   vm_secret_values = {
     database           = random_password.database.result
     credentials        = random_bytes.app_keys["credentials"].base64
@@ -38,8 +38,6 @@ locals {
     backup             = random_bytes.app_keys["backup"].base64
     "vobiz-webhook"    = random_password.vobiz_secrets["webhook"].result
     "vobiz-route"      = random_password.vobiz_secrets["route-token"].result
-    "object-access-id" = google_storage_hmac_key.backend.access_id
-    "object-secret"    = google_storage_hmac_key.backend.secret
   }
 }
 
@@ -338,11 +336,6 @@ resource "google_storage_bucket_iam_member" "function_objects" {
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.post_call_function.email}"
 }
-resource "google_storage_hmac_key" "backend" {
-  project               = var.project_id
-  service_account_email = google_service_account.backend.email
-  depends_on            = [google_project_service.apis]
-}
 resource "google_cloud_tasks_queue" "post_call" {
   name     = "chiefvoice-post-call"
   location = var.region
@@ -463,7 +456,7 @@ resource "google_secret_manager_secret_iam_member" "function_db_access" {
   member    = "serviceAccount:${google_service_account.post_call_function.email}"
 }
 resource "google_secret_manager_secret_iam_member" "function_recording_storage_access" {
-  for_each  = toset(["credentials", "recordings", "object-access-id", "object-secret"])
+  for_each  = toset(["credentials", "recordings"])
   secret_id = google_secret_manager_secret.vm_runtime[each.key].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.post_call_function.email}"

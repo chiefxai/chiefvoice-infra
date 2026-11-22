@@ -36,8 +36,6 @@ output "cloud_build_substitutions" {
     _CREDENTIALS_ENCRYPTION_KEY_SECRET       = google_secret_manager_secret.vm_runtime["credentials"].secret_id
     _POST_CALL_ENCRYPTION_KEY_SECRET         = google_secret_manager_secret.post_call_key.secret_id
     _RECORDINGS_ENCRYPTION_KEY_SECRET        = google_secret_manager_secret.vm_runtime["recordings"].secret_id
-    _OBJECT_STORAGE_ACCESS_KEY_ID_SECRET     = google_secret_manager_secret.vm_runtime["object-access-id"].secret_id
-    _OBJECT_STORAGE_SECRET_ACCESS_KEY_SECRET = google_secret_manager_secret.vm_runtime["object-secret"].secret_id
     _OBJECT_STORAGE_BUCKET                   = google_storage_bucket.objects.name
     _VERTEX_LOCATION                         = var.vertex_location
     _POST_CALL_LOCATION                      = var.post_call_location

@@ -90,11 +90,8 @@ class DeploymentConfigValidationTests(unittest.TestCase):
         self.assertIn("network                  = google_compute_network.main.id", function_subnet)
         self.assertIn('private_ip_google_access = false', function_subnet)
         self.assertIn('output "backend_subnet" { value = google_compute_subnetwork.backend.name }', outputs)
-        self.assertIn('_FUNCTION_NETWORK                        = google_compute_network.main.name', outputs)
-        self.assertIn(
-            '_FUNCTION_SUBNET                         = google_compute_subnetwork.function_egress.name',
-            outputs,
-        )
+        self.assertRegex(outputs, r"_FUNCTION_NETWORK[ \t]*=[ \t]*google_compute_network\.main\.name")
+        self.assertRegex(outputs, r"_FUNCTION_SUBNET[ \t]*=[ \t]*google_compute_subnetwork\.function_egress\.name")
         self.assertNotIn("FUNCTION_VPC_CONNECTOR", outputs)
         self.assertNotIn("google_vpc_access_connector", outputs)
         self.assertIn('ip_cidr_range            = "10.8.1.0/26"', main)
