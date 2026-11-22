@@ -178,7 +178,7 @@ resource "google_iam_workload_identity_pool" "github" {
 resource "google_iam_workload_identity_pool_provider" "github" {
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
   workload_identity_pool_provider_id = "github"
-  display_name                       = "Chiefvoice production repositories"
+  display_name                       = "Chiefvoice GitHub"
   description                        = "Only the main branches of the Chiefvoice app and infrastructure repositories may federate"
   disabled                           = false
   attribute_mapping = {
