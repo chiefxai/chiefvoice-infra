@@ -30,4 +30,4 @@ jobs:
           terraform_version: 1.10.5
       - name: Format and validate AWS Terraform
         working-directory: aws
-        run: terraform fmt -recursive && terraform init -backend=false -input=false && terraform validate
+        run: terraform fmt -check -recursive && terraform init -backend=false -input=false && terraform validate
