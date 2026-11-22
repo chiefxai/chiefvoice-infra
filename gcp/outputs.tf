@@ -8,6 +8,7 @@ output "post_call_tasks_queue" { value = google_cloud_tasks_queue.post_call.id }
 output "post_call_task_invoker_service_account" { value = google_service_account.task_invoker.email }
 output "post_call_function_network" { value = google_compute_network.main.name }
 output "post_call_function_subnet" { value = google_compute_subnetwork.function_egress.name }
+output "backend_subnet" { value = google_compute_subnetwork.backend.name }
 output "object_storage_bucket" { value = google_storage_bucket.objects.name }
 output "object_storage_endpoint" { value = "https://storage.googleapis.com" }
 output "object_storage_signing_region" { value = "auto" }

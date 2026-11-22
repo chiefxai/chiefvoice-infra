@@ -45,8 +45,15 @@ locals {
 
 resource "google_compute_network" "main" {
   name                    = "chiefvoice-vpc"
-  auto_create_subnetworks = true
+  auto_create_subnetworks = false
   depends_on              = [google_project_service.apis]
+}
+resource "google_compute_subnetwork" "backend" {
+  name                     = "chiefvoice-backend"
+  ip_cidr_range            = "10.8.0.0/24"
+  region                   = var.region
+  network                  = google_compute_network.main.id
+  private_ip_google_access = false
 }
 resource "google_compute_address" "backend" {
   name   = "chiefvoice-backend-ip"
@@ -523,7 +530,8 @@ resource "google_compute_instance" "backend" {
     }
   }
   network_interface {
-    network = google_compute_network.main.id
+    network    = google_compute_network.main.id
+    subnetwork = google_compute_subnetwork.backend.id
     access_config { nat_ip = google_compute_address.backend.address }
   }
   service_account {

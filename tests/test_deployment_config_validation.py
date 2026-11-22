@@ -70,6 +70,26 @@ class DeploymentConfigValidationTests(unittest.TestCase):
         main = (Path(__file__).resolve().parents[1] / "gcp" / "main.tf").read_text(
             encoding="utf-8"
         )
+        network = main.split(
+            'resource "google_compute_network" "main" {', 1
+        )[1].split("\n}", 1)[0]
+        backend_subnet = main.split(
+            'resource "google_compute_subnetwork" "backend" {', 1
+        )[1].split("\n}", 1)[0]
+        function_subnet = main.split(
+            'resource "google_compute_subnetwork" "function_egress" {', 1
+        )[1].split("\n}", 1)[0]
+        self.assertIn("auto_create_subnetworks = false", network)
+        self.assertIn('name                     = "chiefvoice-backend"', backend_subnet)
+        self.assertIn('ip_cidr_range            = "10.8.0.0/24"', backend_subnet)
+        self.assertIn("region                   = var.region", backend_subnet)
+        self.assertIn("network                  = google_compute_network.main.id", backend_subnet)
+        self.assertIn('private_ip_google_access = false', backend_subnet)
+        self.assertIn('ip_cidr_range            = "10.8.1.0/26"', function_subnet)
+        self.assertIn("region                   = var.region", function_subnet)
+        self.assertIn("network                  = google_compute_network.main.id", function_subnet)
+        self.assertIn('private_ip_google_access = false', function_subnet)
+        self.assertIn('output "backend_subnet" { value = google_compute_subnetwork.backend.name }', outputs)
         self.assertIn('_FUNCTION_NETWORK                        = google_compute_network.main.name', outputs)
         self.assertIn(
             '_FUNCTION_SUBNET                         = google_compute_subnetwork.function_egress.name',
@@ -78,6 +98,22 @@ class DeploymentConfigValidationTests(unittest.TestCase):
         self.assertNotIn("FUNCTION_VPC_CONNECTOR", outputs)
         self.assertNotIn("google_vpc_access_connector", outputs)
         self.assertIn('ip_cidr_range            = "10.8.1.0/26"', main)
+        backend_instance = main.split(
+            'resource "google_compute_instance" "backend" {', 1
+        )[1]
+        self.assertIn(
+            "subnetwork = google_compute_subnetwork.backend.id", backend_instance
+        )
+        public_firewall = main.split(
+            'resource "google_compute_firewall" "backend" {', 1
+        )[1].split("\n}", 1)[0]
+        ssh_firewall = main.split(
+            'resource "google_compute_firewall" "iap_ssh" {', 1
+        )[1].split("\n}", 1)[0]
+        self.assertIn('ports    = ["80", "443"]', public_firewall)
+        self.assertIn('source_ranges = ["0.0.0.0/0"]', public_firewall)
+        self.assertIn('ports    = ["22"]', ssh_firewall)
+        self.assertIn('source_ranges = ["35.235.240.0/20"]', ssh_firewall)
         postgres_firewall = main.split(
             'resource "google_compute_firewall" "postgres_from_tasks" {', 1
         )[1].split("\n}", 1)[0]
