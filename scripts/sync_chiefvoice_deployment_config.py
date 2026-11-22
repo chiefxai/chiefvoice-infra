@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -16,6 +18,14 @@ API_ROOT = "https://api.github.com"
 REPOSITORY = "chiefxai/chiefvoice"
 VARIABLES_PATH = f"/repos/{REPOSITORY}/actions/variables"
 MAX_VARIABLE_BYTES = 48 * 1024
+_PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
+_REGION = re.compile(r"^[a-z]+-[a-z0-9]+[0-9]$")
+_SERVICE_ACCOUNT = re.compile(r"^[^@\s]+@[^@\s]+\.iam\.gserviceaccount\.com$")
+_SUBSTITUTION_KEY = re.compile(r"^_[A-Z0-9_]+$")
+_WORKLOAD_IDENTITY_PROVIDER = re.compile(
+    r"^projects/[1-9][0-9]*/locations/global/"
+    r"workloadIdentityPools/[a-z][a-z0-9-]{2,31}/providers/[a-z][a-z0-9-]{2,31}$"
+)
 
 
 def api_request(method: str, path: str, token: str, payload: dict | None = None) -> tuple[int, bytes]:
@@ -47,6 +57,41 @@ def required_env(name: str) -> str:
     return value
 
 
+def validate_deployment_values(
+    project_id: str,
+    region: str,
+    provider: str,
+    cloud_build_service_account: str,
+    substitutions: object,
+) -> dict[str, str | int | float | bool]:
+    if not _PROJECT_ID.fullmatch(project_id):
+        raise RuntimeError("Terraform returned an invalid GCP project ID")
+    if not _REGION.fullmatch(region):
+        raise RuntimeError("Terraform returned an invalid GCP region")
+    if not _WORKLOAD_IDENTITY_PROVIDER.fullmatch(provider):
+        raise RuntimeError("Terraform returned an invalid Workload Identity Provider resource name")
+    if not _SERVICE_ACCOUNT.fullmatch(cloud_build_service_account):
+        raise RuntimeError("Terraform returned an invalid Cloud Build service account")
+    if not isinstance(substitutions, dict) or not substitutions:
+        raise RuntimeError("Terraform returned an empty Cloud Build substitutions map")
+
+    for key, value in substitutions.items():
+        if not isinstance(key, str) or not _SUBSTITUTION_KEY.fullmatch(key):
+            raise RuntimeError(f"Invalid Cloud Build substitution key: {key!r}")
+        if not isinstance(value, (str, int, float, bool)):
+            raise RuntimeError(f"Invalid Cloud Build substitution value for {key}")
+        if isinstance(value, str):
+            if not value.strip():
+                raise RuntimeError(f"Cloud Build substitution {key} is empty")
+            if value != value.strip():
+                raise RuntimeError(f"Cloud Build substitution {key} has surrounding whitespace")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise RuntimeError(f"Cloud Build substitution {key} is not a finite number")
+        if "\n" in str(value) or "\r" in str(value):
+            raise RuntimeError(f"Cloud Build substitution {key} contains a newline")
+    return substitutions
+
+
 def main() -> None:
     token = required_env("CHIEFVOICE_REPO_VARIABLES_TOKEN")
     project_id = required_env("GCP_PROJECT_ID")
@@ -55,15 +100,13 @@ def main() -> None:
     cloud_build_service_account = required_env("GCP_CLOUD_BUILD_SERVICE_ACCOUNT")
     substitutions_path = Path(required_env("CLOUDBUILD_SUBSTITUTIONS_FILE"))
     substitutions = json.loads(substitutions_path.read_text(encoding="utf-8"))
-    if not isinstance(substitutions, dict) or not substitutions:
-        raise RuntimeError("Terraform returned an empty Cloud Build substitutions map")
-    for key, value in substitutions.items():
-        if not isinstance(key, str) or not key.startswith("_"):
-            raise RuntimeError(f"Invalid Cloud Build substitution key: {key!r}")
-        if not isinstance(value, (str, int, float, bool)):
-            raise RuntimeError(f"Invalid Cloud Build substitution value for {key}")
-        if "\n" in str(value) or "\r" in str(value):
-            raise RuntimeError(f"Cloud Build substitution {key} contains a newline")
+    substitutions = validate_deployment_values(
+        project_id,
+        region,
+        provider,
+        cloud_build_service_account,
+        substitutions,
+    )
 
     values = {
         "GCP_PROJECT_ID": project_id,
@@ -74,10 +117,12 @@ def main() -> None:
             substitutions, sort_keys=True, separators=(",", ":")
         ),
     }
-    collection = VARIABLES_PATH
     for name, value in values.items():
         if len(value.encode("utf-8")) > MAX_VARIABLE_BYTES:
             raise RuntimeError(f"GitHub Actions variable exceeds the 48 KB limit: {name}")
+
+    collection = VARIABLES_PATH
+    for name, value in values.items():
         encoded_name = quote(name, safe="")
         path = f"{collection}/{encoded_name}"
         status, _ = api_request("GET", path, token)
