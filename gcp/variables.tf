@@ -67,7 +67,7 @@ variable "oidc_jwks_url" {
 }
 variable "oidc_tenant_claim" {
   type        = string
-  default     = "https://chiefvoice.elvoryx.in/tenant_id"
+  default     = "https://core.elvoryx.in/tenant_id"
   description = "OIDC claim containing the platform tenant ID. Auth0 custom claims must be namespaced."
 }
 variable "platform_admin_subjects" {

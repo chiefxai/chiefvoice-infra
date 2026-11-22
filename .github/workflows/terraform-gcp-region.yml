@@ -242,5 +242,5 @@ jobs:
             echo
             echo "New static IP: `$ip`"
             echo
-            echo "Update the DNS A record for `chiefvoice.elvoryx.in` to this IP. Then run the existing Deploy to GCP workflow to build and deploy the API, console, and post-call function onto the fresh VM/database."
+            echo "Update the DNS A record for `core.elvoryx.in` to this IP. Then run the existing Deploy to GCP workflow to build and deploy the API, console, and post-call function onto the fresh VM/database."
           } >> "$GITHUB_STEP_SUMMARY"
