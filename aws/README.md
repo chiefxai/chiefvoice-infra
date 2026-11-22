@@ -11,6 +11,15 @@ This independent Terraform root describes a possible future AWS deployment. GCP 
 
 ## Apply
 
+From this directory, copy the examples and replace their placeholders before initializing Terraform:
+
+```sh
+cp backend.hcl.example backend.hcl
+cp terraform.tfvars.example terraform.tfvars
+```
+
+The examples are not complete configurations. In `terraform.tfvars`, set every required variable in `variables.tf` that has no default. This includes the Ubuntu AMI, restricted SSH CIDR, API and Lambda image URIs, public domain, OIDC issuer/audience/JWKS URL, GCP project parent, billing account, runtime service account, budget project, Google credential secret ARN, and globally unique object bucket name. The backend file needs an already-created private S3 bucket and DynamoDB lock table. Use AWS credentials with access to that backend and to the resources in this root. The Google service-account JSON referenced by `google_credentials_secret_arn` must be available in AWS Secrets Manager and authorized for the configured GCP project/billing operations. Do not commit either populated file.
+
 ```sh
 terraform init -backend-config=backend.hcl
 terraform plan -var-file=terraform.tfvars
