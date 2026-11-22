@@ -332,6 +332,12 @@ resource "google_storage_bucket_iam_member" "backend_objects" {
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.backend.email}"
 }
+
+resource "google_storage_bucket_iam_member" "function_objects" {
+  bucket = google_storage_bucket.objects.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.post_call_function.email}"
+}
 resource "google_storage_hmac_key" "backend" {
   project               = var.project_id
   service_account_email = google_service_account.backend.email
