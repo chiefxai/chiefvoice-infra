@@ -63,6 +63,31 @@ class DeploymentConfigValidationTests(unittest.TestCase):
                 "577933119654",
             )
 
+    def test_cloud_build_outputs_use_direct_vpc_network_and_subnet(self):
+        outputs = (Path(__file__).resolve().parents[1] / "gcp" / "outputs.tf").read_text(
+            encoding="utf-8"
+        )
+        main = (Path(__file__).resolve().parents[1] / "gcp" / "main.tf").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('_FUNCTION_NETWORK                        = google_compute_network.main.name', outputs)
+        self.assertIn(
+            '_FUNCTION_SUBNET                         = google_compute_subnetwork.function_egress.name',
+            outputs,
+        )
+        self.assertNotIn("FUNCTION_VPC_CONNECTOR", outputs)
+        self.assertNotIn("google_vpc_access_connector", outputs)
+        self.assertIn('ip_cidr_range            = "10.8.1.0/26"', main)
+        postgres_firewall = main.split(
+            'resource "google_compute_firewall" "postgres_from_tasks" {', 1
+        )[1].split("\n}", 1)[0]
+        self.assertIn(
+            "source_ranges = [google_compute_subnetwork.function_egress.ip_cidr_range]",
+            postgres_firewall,
+        )
+        self.assertIn('ports    = ["5432"]', postgres_firewall)
+        self.assertNotIn("0.0.0.0/0", postgres_firewall)
+
 
 if __name__ == "__main__":
     unittest.main()

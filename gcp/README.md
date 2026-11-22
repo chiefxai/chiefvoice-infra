@@ -2,7 +2,11 @@
 
 This repository owns the active GCP Terraform root at `gcp/`. The target environment is project `chiefvoice-service` (project number `577933119654`), region `asia-south1`, zone `asia-south1-a`. The application and Cloud Build deploy workflow remain in [`chiefxai/chiefvoice`](https://github.com/chiefxai/chiefvoice).
 
-The deployment runs the API and PostgreSQL on a Compute Engine VM. Cloud Tasks queues post-call work for a second-generation Cloud Function. Cloud Storage holds recordings and encrypted backups. Terraform output values are the source of truth for the project, region, deployment service accounts, WIF provider resource name, and Cloud Build substitutions.
+The deployment runs the API and PostgreSQL on a Compute Engine VM. Cloud Tasks queues post-call work for a second-generation Cloud Function. The function reaches PostgreSQL through Direct VPC egress on the dedicated `chiefvoice-function-egress` subnet (`10.8.1.0/26`) in `asia-south1`; the VM firewall allows TCP 5432 only from that subnet. Cloud Storage holds recordings and encrypted backups. Terraform output values are the source of truth for the project, region, deployment service accounts, WIF provider resource name, and Cloud Build substitutions.
+
+The Cloud Run service agent's default `roles/run.serviceAgent` role supplies the Direct VPC network permissions. Keep that Google-managed role intact; this configuration adds no broader network IAM grant. The function uses `private-ranges-only`, so only private destinations such as the VM database use the VPC path.
+
+The target VPC did not exist during this review, so routes and peerings for it could not be inspected. `10.8.1.0/26` is outside the auto-mode subnet block and does not overlap the project subnet ranges reported by the administrator or the old connector range. Recheck routes and peerings after the VPC exists and before applying Terraform.
 
 ## Safety gates before initialization
 

@@ -5,7 +5,7 @@ locals {
     "cloudresourcemanager.googleapis.com", "cloudtasks.googleapis.com", "compute.googleapis.com",
     "cloudfunctions.googleapis.com", "iam.googleapis.com", "iamcredentials.googleapis.com",
     "run.googleapis.com", "secretmanager.googleapis.com", "serviceusage.googleapis.com", "speech.googleapis.com", "sts.googleapis.com",
-    "storage.googleapis.com", "vpcaccess.googleapis.com",
+    "storage.googleapis.com",
   ])
 }
 
@@ -79,18 +79,15 @@ resource "google_compute_firewall" "postgres_from_tasks" {
     protocol = "tcp"
     ports    = ["5432"]
   }
-  source_ranges = ["10.8.0.0/28"]
+  source_ranges = [google_compute_subnetwork.function_egress.ip_cidr_range]
   target_tags   = ["chiefvoice-backend"]
 }
-resource "google_vpc_access_connector" "functions" {
-  name          = "chiefvoice-functions"
-  region        = var.region
-  network       = google_compute_network.main.name
-  ip_cidr_range = "10.8.0.0/28"
-  machine_type  = "e2-micro"
-  min_instances = 2
-  max_instances = 3
-  depends_on    = [google_project_service.apis]
+resource "google_compute_subnetwork" "function_egress" {
+  name                     = "chiefvoice-function-egress"
+  ip_cidr_range            = "10.8.1.0/26"
+  region                   = var.region
+  network                  = google_compute_network.main.id
+  private_ip_google_access = false
 }
 
 resource "google_storage_bucket" "objects" {
@@ -222,7 +219,6 @@ resource "google_project_iam_member" "github_infra_terraform_roles" {
     "roles/secretmanager.admin",
     "roles/serviceusage.serviceUsageAdmin",
     "roles/storage.admin",
-    "roles/vpcaccess.admin",
   ])
   project = var.project_id
   role    = each.value
