@@ -5,7 +5,7 @@ locals {
     "cloudresourcemanager.googleapis.com", "cloudtasks.googleapis.com", "compute.googleapis.com",
     "cloudfunctions.googleapis.com", "iam.googleapis.com", "iamcredentials.googleapis.com",
     "run.googleapis.com", "secretmanager.googleapis.com", "serviceusage.googleapis.com", "speech.googleapis.com", "sts.googleapis.com",
-    "storage.googleapis.com", "vpcaccess.googleapis.com",
+    "storage.googleapis.com",
   ])
 }
 
@@ -45,8 +45,15 @@ locals {
 
 resource "google_compute_network" "main" {
   name                    = "chiefvoice-vpc"
-  auto_create_subnetworks = true
+  auto_create_subnetworks = false
   depends_on              = [google_project_service.apis]
+}
+resource "google_compute_subnetwork" "backend" {
+  name                     = "chiefvoice-backend"
+  ip_cidr_range            = "10.8.0.0/24"
+  region                   = var.region
+  network                  = google_compute_network.main.id
+  private_ip_google_access = false
 }
 resource "google_compute_address" "backend" {
   name   = "chiefvoice-backend-ip"
@@ -79,28 +86,48 @@ resource "google_compute_firewall" "postgres_from_tasks" {
     protocol = "tcp"
     ports    = ["5432"]
   }
-  source_ranges = ["10.8.0.0/28"]
+  source_ranges = [google_compute_subnetwork.function_egress.ip_cidr_range]
   target_tags   = ["chiefvoice-backend"]
 }
-resource "google_vpc_access_connector" "functions" {
-  name          = "chiefvoice-functions"
-  region        = var.region
-  network       = google_compute_network.main.name
-  ip_cidr_range = "10.8.0.0/28"
-  machine_type  = "e2-micro"
-  min_instances = 2
-  max_instances = 3
-  depends_on    = [google_project_service.apis]
+resource "google_compute_subnetwork" "function_egress" {
+  name                     = "chiefvoice-function-egress"
+  ip_cidr_range            = "10.8.1.0/26"
+  region                   = var.region
+  network                  = google_compute_network.main.id
+  private_ip_google_access = false
 }
 
 resource "google_storage_bucket" "objects" {
   name                        = var.object_storage_bucket_name
+  project                     = var.project_id
   location                    = var.region
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
-  # Regional migration intentionally replaces this bucket; old recordings and backups may be discarded.
-  force_destroy               = true
+  force_destroy               = false
   labels                      = var.labels
+
+  lifecycle_rule {
+    action {
+      type = "Delete"
+    }
+    condition {
+      with_state         = "ARCHIVED"
+      num_newer_versions = 5
+    }
+  }
+
+  lifecycle_rule {
+    action {
+      type = "Delete"
+    }
+    condition {
+      days_since_noncurrent_time = 50
+    }
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 resource "google_artifact_registry_repository" "images" {
   location      = var.region
@@ -130,21 +157,30 @@ resource "google_service_account" "github_deploy" {
   account_id   = "chiefvoice-github-deploy"
   display_name = "Chiefvoice GitHub Actions Cloud Build submitter"
 }
+resource "google_service_account" "github_infra_terraform" {
+  account_id   = "chiefvoice-terraform"
+  display_name = "Chiefvoice GitHub Actions Terraform manager"
+}
 data "google_project" "current" {
   project_id = var.project_id
 }
 resource "google_iam_workload_identity_pool" "github" {
-  workload_identity_pool_id = "github-actions"
+  workload_identity_pool_id = "chiefvoice-service"
   display_name              = "GitHub Actions"
   description               = "Federation for the Chiefvoice application and infrastructure repositories"
   disabled                  = false
   depends_on                = [google_project_service.apis]
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 resource "google_iam_workload_identity_pool_provider" "github" {
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
-  workload_identity_pool_provider_id = "chiefvoice-production"
+  workload_identity_pool_provider_id = "github"
   display_name                       = "Chiefvoice production repositories"
   description                        = "Only the main branches of the Chiefvoice app and infrastructure repositories may federate"
+  disabled                           = false
   attribute_mapping = {
     "google.subject"       = "assertion.sub"
     "attribute.repository" = "assertion.repository"
@@ -154,6 +190,10 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 resource "google_service_account_iam_member" "github_deploy_wif" {
   service_account_id = google_service_account.github_deploy.name
@@ -161,7 +201,7 @@ resource "google_service_account_iam_member" "github_deploy_wif" {
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_repository}"
 }
 resource "google_service_account_iam_member" "github_infra_wif" {
-  service_account_id = google_service_account.github_deploy.name
+  service_account_id = google_service_account.github_infra_terraform.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_infra_repository}"
 }
@@ -175,12 +215,7 @@ resource "google_project_iam_member" "github_deploy_service_usage" {
   role    = "roles/serviceusage.serviceUsageConsumer"
   member  = "serviceAccount:${google_service_account.github_deploy.email}"
 }
-resource "google_project_iam_member" "github_deploy_cloudbuild_bucket_lister" {
-  project = var.project_id
-  role    = "roles/storage.bucketViewer"
-  member  = "serviceAccount:${google_service_account.github_deploy.email}"
-}
-resource "google_project_iam_member" "github_deploy_terraform_roles" {
+resource "google_project_iam_member" "github_infra_terraform_roles" {
   for_each = toset([
     "roles/artifactregistry.admin",
     "roles/cloudtasks.admin",
@@ -191,47 +226,58 @@ resource "google_project_iam_member" "github_deploy_terraform_roles" {
     "roles/secretmanager.admin",
     "roles/serviceusage.serviceUsageAdmin",
     "roles/storage.admin",
-    "roles/vpcaccess.admin",
   ])
   project = var.project_id
   role    = each.value
-  member  = "serviceAccount:${google_service_account.github_deploy.email}"
+  member  = "serviceAccount:${google_service_account.github_infra_terraform.email}"
 }
-resource "google_service_account_iam_member" "github_deploy_backend_act_as" {
+resource "google_service_account_iam_member" "github_infra_terraform_backend_act_as" {
   service_account_id = google_service_account.backend.name
   role               = "roles/iam.serviceAccountUser"
-  member             = "serviceAccount:${google_service_account.github_deploy.email}"
+  member             = "serviceAccount:${google_service_account.github_infra_terraform.email}"
 }
-resource "google_storage_bucket_iam_member" "github_deploy_terraform_state" {
+resource "google_storage_bucket_iam_member" "github_infra_terraform_state" {
   bucket = var.terraform_state_bucket_name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.github_deploy.email}"
+  member = "serviceAccount:${google_service_account.github_infra_terraform.email}"
 }
-data "google_storage_bucket" "cloudbuild_source" {
-  name = "${var.project_id}_cloudbuild"
+resource "google_storage_bucket" "cloudbuild_source" {
+  name                        = "${var.project_id}_cloudbuild"
+  project                     = var.project_id
+  location                    = var.region
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  force_destroy               = false
+  labels                      = var.labels
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  depends_on = [google_project_service.apis]
 }
 resource "google_storage_bucket_iam_member" "github_deploy_cloudbuild_bucket_viewer" {
-  bucket = data.google_storage_bucket.cloudbuild_source.name
+  bucket = google_storage_bucket.cloudbuild_source.name
   role   = "roles/storage.bucketViewer"
   member = "serviceAccount:${google_service_account.github_deploy.email}"
 }
 resource "google_storage_bucket_iam_member" "github_deploy_cloudbuild_source_creator" {
-  bucket = data.google_storage_bucket.cloudbuild_source.name
+  bucket = google_storage_bucket.cloudbuild_source.name
   role   = "roles/storage.objectCreator"
   member = "serviceAccount:${google_service_account.github_deploy.email}"
 }
 resource "google_storage_bucket_iam_member" "github_deploy_cloudbuild_source_viewer" {
-  bucket = data.google_storage_bucket.cloudbuild_source.name
+  bucket = google_storage_bucket.cloudbuild_source.name
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_service_account.github_deploy.email}"
 }
 resource "google_storage_bucket_iam_member" "cloud_build_cloudbuild_bucket_viewer" {
-  bucket = data.google_storage_bucket.cloudbuild_source.name
+  bucket = google_storage_bucket.cloudbuild_source.name
   role   = "roles/storage.bucketViewer"
   member = "serviceAccount:${google_service_account.cloud_build.email}"
 }
 resource "google_storage_bucket_iam_member" "cloud_build_cloudbuild_object_user" {
-  bucket = data.google_storage_bucket.cloudbuild_source.name
+  bucket = google_storage_bucket.cloudbuild_source.name
   role   = "roles/storage.objectUser"
   member = "serviceAccount:${google_service_account.cloud_build.email}"
 }
@@ -484,7 +530,8 @@ resource "google_compute_instance" "backend" {
     }
   }
   network_interface {
-    network = google_compute_network.main.id
+    network    = google_compute_network.main.id
+    subnetwork = google_compute_subnetwork.backend.id
     access_config { nat_ip = google_compute_address.backend.address }
   }
   service_account {

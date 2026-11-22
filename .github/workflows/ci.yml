@@ -20,6 +20,14 @@ jobs:
       - name: Format and validate GCP Terraform
         working-directory: gcp
         run: terraform fmt -recursive && terraform init -backend=false -input=false && terraform validate
+      - name: Validate GCP state bootstrap Terraform
+        working-directory: gcp/state
+        run: terraform fmt -check -recursive && terraform init -backend=false -input=false && terraform validate
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test deployment output validation
+        run: python -m unittest discover -s tests -p 'test_deployment_config_validation.py'
   validate-aws:
     runs-on: ubuntu-latest
     timeout-minutes: 15

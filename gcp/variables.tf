@@ -27,8 +27,8 @@ variable "vm_disk_gb" {
 }
 variable "terraform_state_bucket_name" {
   type        = string
-  default     = "chiefvoice-tfstate-297803100712"
-  description = "Existing GCS bucket used by the infra/gcp Terraform backend."
+  default     = "chiefvoice-tfstate-577933119654-8db79b617764"
+  description = "GCS state bucket in chiefvoice-service."
 }
 variable "object_storage_bucket_name" { type = string }
 variable "public_domain" {
@@ -67,7 +67,7 @@ variable "oidc_jwks_url" {
 }
 variable "oidc_tenant_claim" {
   type        = string
-  default     = "https://chiefvoice.elvoryx.in/tenant_id"
+  default     = "https://core.elvoryx.in/tenant_id"
   description = "OIDC claim containing the platform tenant ID. Auth0 custom claims must be namespaced."
 }
 variable "platform_admin_subjects" {

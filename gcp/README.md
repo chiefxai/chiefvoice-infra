@@ -1,127 +1,191 @@
-# GCP VM deployment (active topology)
+# Chiefvoice GCP infrastructure
 
-This Terraform root is the active GCP deployment: one Compute Engine VM runs the API and PostgreSQL, Cloud Tasks queues post-call work, and an authenticated second-generation Cloud Function processes jobs. PostgreSQL stays on the VM's encrypted persistent disk. Recordings and encrypted database backups use the private Cloud Storage bucket through its S3-compatible endpoint.
+This repository owns the active GCP Terraform root at `gcp/`. The target environment is project `chiefvoice-service` (project number `577933119654`), region `asia-south1`, zone `asia-south1-a`. The application and Cloud Build deploy workflow remain in [`chiefxai/chiefvoice`](https://github.com/chiefxai/chiefvoice).
 
-## Prerequisites
+The deployment runs the API and PostgreSQL on a Compute Engine VM in the custom-mode `chiefvoice-vpc`. The VM uses the dedicated `chiefvoice-backend` subnet (`10.8.0.0/24`) in `asia-south1`. Cloud Tasks queues post-call work for a second-generation Cloud Function. The function reaches PostgreSQL through Direct VPC egress on the separate `chiefvoice-function-egress` subnet (`10.8.1.0/26`) in `asia-south1`; the VM firewall allows TCP 5432 only from that Function subnet. Cloud Storage holds recordings and encrypted backups. Terraform output values are the source of truth for the project, region, deployment service accounts, WIF provider resource name, and Cloud Build substitutions.
 
-Run the commands in this guide from this repository root unless a command explicitly changes directory. The Terraform root is `gcp/`.
+The Cloud Run service agent's default `roles/run.serviceAgent` role supplies the Direct VPC network permissions. Keep that Google-managed role intact; this configuration adds no broader network IAM grant. The function uses `private-ranges-only`, so only private destinations such as the VM database use the VPC path.
 
-- Start Docker Desktop, then authenticate with your own Google account. These commands run gcloud in the provided container and save ADC credentials in the local, Git-ignored `.gcloud/` directory. Complete the Google login in your browser and enter its one-time code in your local terminal; do not send it here. Your account needs permission to manage resources and IAM in `chief-502717` and enable project APIs. Project Owner is the simplest one-time setup role; Terraform creates dedicated runtime and build service accounts for the deployed app.
+The administrator reported that `chiefvoice-vpc` did not exist and the listed project subnet was `10.160.0.0/20`. The proposed `10.8.0.0/24` backend range and `10.8.1.0/26` Function range are disjoint from that reported subnet, each other, and the auto-mode subnet block. Because the target VPC was absent, it had no attached routes or peerings to inspect; the main root also declares no custom routes or peerings. Refresh live range checks before applying if the VPC has since been created, and check again before adding any future peering or route. Both subnets leave Private Google Access disabled because the Function does not require Google APIs through internal IP addresses.
 
-  ```sh
-  mkdir -p .gcloud
-  docker compose -f gcp/terraform-compose.yaml run --rm gcloud auth login --no-launch-browser
-  docker compose -f gcp/terraform-compose.yaml run --rm gcloud config set project chief-502717
-  docker compose -f gcp/terraform-compose.yaml run --rm gcloud auth application-default login --no-launch-browser
-  docker compose -f gcp/terraform-compose.yaml run --rm gcloud auth application-default set-quota-project chief-502717
-  ```
+Changing an existing VPC from auto to custom mode is one-way; Google preserves its existing auto-created subnets. The current Google Terraform provider treats the VM's `network_interface` block as replacement-only. If `google_compute_instance.backend` is already tracked, explicitly adding its subnet can replace the VM. Do not approve a plan showing VM replacement without a separate data-preserving migration and downtime plan.
 
-- Bootstrap the private, versioned Terraform state bucket before initializing the production GCS backend:
+## Safety gates before initialization
 
-  ```sh
-  docker compose -f gcp/terraform-compose.yaml run --rm terraform -chdir=state init
-  docker compose -f gcp/terraform-compose.yaml run --rm terraform -chdir=state plan
-  docker compose -f gcp/terraform-compose.yaml run --rm terraform -chdir=state apply
-  cp gcp/backend.hcl.example gcp/backend.hcl
-  cp gcp/terraform.tfvars.example gcp/terraform.tfvars
-  ```
+The dedicated Terraform state bucket is `gs://chiefvoice-tfstate-577933119654-8db79b617764` in `ASIA-SOUTH1`, with uniform access, public access prevention, and versioning. The original candidate name was unavailable globally. The bucket was created through `gcp/state/`; preserve that root's local `terraform.tfstate` file in the Cloud Shell checkout. The main `gcp/` backend is initialized to this bucket with prefix `chiefvoice/prod`. Check its state addresses before importing any resources.
 
-  The state bucket stack uses local state only to create that bucket; subsequent production state is kept in GCS. The bucket is private and protected from accidental Terraform destruction.
-- Ensure billing is active on `chief-502717` under the supplied billing account. This shared-project deployment does not attach customer projects to the billing account.
-- The VM and supporting infrastructure can be provisioned before Auth0 is configured. With empty OIDC values the API fails closed and the console cannot sign in; finish Auth0 setup and rerun Terraform plus Cloud Build before using the service.
-- Set `public_domain` to a DNS name you control. Point its A record to `backend_external_ip` before the first public deployment so Caddy can obtain/renew its HTTPS certificate. Provider callback URLs are HTTPS.
-- Configure OIDC authority, client ID, issuer, audience and JWKS URL; `terraform.tfvars.example` shows the values. Leave them empty only for infrastructure-only bootstrap.
-- Set `platform_admin_subjects` to trusted OIDC `sub` values for platform operators. Customer provisioning also requires `platform:customers:write` or `platform:customers:read` in the token scope; an empty allowlist disables customer administration.
-- This no-organization deployment uses the hosting project for Vertex AI. Customer records, API keys and call data remain tenant-scoped in PostgreSQL, but Vertex project-level usage and spend caps are shared. The backend and post-call function identities receive Vertex AI access only in this project. Per-customer Vertex project isolation requires a GCP folder/organization or manually provisioned customer projects and a later integration change.
-- Terraform creates the `chiefvoice-build` service account and exposes the deployment-specific Cloud Build substitutions as an output. The app deployment workflow passes these values on every build; do not maintain a separate Cloud Build trigger with stale substitutions.
-- The app deployment workflow is `chiefxai/chiefvoice/.github/workflows/deploy-gcp.yml`. After a successful Terraform apply, the infra workflows synchronize `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_CLOUD_BUILD_SERVICE_ACCOUNT`, and `GCP_CLOUDBUILD_SUBSTITUTIONS_JSON` into the `chiefxai/chiefvoice` repository. These are non-secret configuration outputs; Cloud Build receives the complete substitutions map at deploy time.
-- Use `.github/workflows/terraform-apply-gcp.yml` for normal GCP changes. It creates an encrypted plan, shows the resource actions, and applies only when you choose `yes` and the protected `production` environment approves it. The post-apply step updates the app repository variables automatically. Direct local Terraform applies do not run that sync step; use `.github/workflows/sync-gcp-app-config.yml` afterward to refresh the app repository variables.
-- In `chiefxai/chiefvoice-infra`, configure repository variables `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_TF_STATE_BUCKET=chiefvoice-tfstate-297803100712`, and `GCP_TF_STATE_PREFIX=chiefvoice/prod`. Configure repository secrets `GCP_TERRAFORM_TFVARS` and `GCP_TF_PLAN_ENCRYPTION_KEY`. Create a protected `production` environment with required reviewers and add environment secret `CHIEFVOICE_REPO_VARIABLES_TOKEN`: a fine-grained GitHub token limited to `chiefxai/chiefvoice` with **Variables: write** permission. The token lets infra Actions update only the app repo’s deployment variables.
-- The first infra Actions run requires the `github_infra_repository` Workload Identity Federation trust to have been applied once using administrator ADC, because GitHub Actions cannot authenticate to GCP before that trust exists. The existing regional migration workflow also synchronizes the app repo variables after its approved apply.
-- The one-click output sync workflow is `.github/workflows/sync-gcp-app-config.yml`; run it after an emergency local Terraform apply or to repair stale app variables. A separate, manual full-region migration workflow is available at `.github/workflows/terraform-gcp-region.yml`. It uses the same GitHub OIDC identity and Terraform GCS state. It requires `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_TF_STATE_BUCKET`, `GCP_TF_STATE_PREFIX`, secrets `GCP_TERRAFORM_TFVARS` and `GCP_TF_PLAN_ENCRYPTION_KEY`, plus the `production` environment and `CHIEFVOICE_REPO_VARIABLES_TOKEN` secret described above. It creates an encrypted plan and requires explicit confirmation because applying may delete the old VM/database, recordings and backups bucket contents, and queued tasks. It syncs deployment outputs to `chiefvoice` after a successful apply.
+The target project already has a WIF pool `chiefvoice-service` and provider `github`, according to the current administrator report. The provider currently has an incorrect issuer and incomplete attribute mapping. Terraform now declares these exact resource IDs with the GitHub Actions issuer and restrictive repository/branch condition. Import the existing resources into the verified Terraform state before planning; do not create duplicate pools/providers or remove the existing resources.
 
-  Before GitHub Actions can run Terraform, a project administrator must bootstrap permissions for `chiefvoice-github-deploy`. Terraform declares the same project roles, but the initial grant must be made by an existing administrator. In Cloud Shell, run:
+The previously configured remote state could not be located in the projects visible to the administrator account. Existing WIF resources must be imported into the new main state before planning. Confirm the purpose of `gs://chiefvoice-service` before importing it as the recordings/backups bucket. Terraform manages the project-specific `${project_id}_cloudbuild` source bucket in the selected region; it is private and protected from destruction. Destruction is disabled for Terraform-managed state, object, and Cloud Build source buckets.
 
-  ```sh
-  PROJECT=chief-502717
-  DEPLOY_SA=chiefvoice-github-deploy@chief-502717.iam.gserviceaccount.com
-  for ROLE in \
-    roles/artifactregistry.admin \
-    roles/cloudtasks.admin \
-    roles/compute.admin \
-    roles/iam.serviceAccountAdmin \
-    roles/iam.workloadIdentityPoolAdmin \
-    roles/resourcemanager.projectIamAdmin \
-    roles/secretmanager.admin \
-    roles/serviceusage.serviceUsageAdmin \
-    roles/storage.admin \
-    roles/vpcaccess.admin; do
-    gcloud projects add-iam-policy-binding "$PROJECT" \
-      --member="serviceAccount:$DEPLOY_SA" --role="$ROLE" --condition=None --quiet
-  done
-  gcloud iam service-accounts add-iam-policy-binding \
-    chiefvoice-backend@chief-502717.iam.gserviceaccount.com \
-    --project="$PROJECT" --member="serviceAccount:$DEPLOY_SA" \
-    --role=roles/iam.serviceAccountUser --quiet
-  gcloud storage buckets add-iam-policy-binding \
-    gs://chiefvoice-tfstate-297803100712 \
-    --member="serviceAccount:$DEPLOY_SA" --role=roles/storage.objectAdmin
-  ```
+## 1. Authenticate and inspect existing state
 
-  This is a powerful production deploy identity: Terraform manages project IAM bindings, so it receives `roles/resourcemanager.projectIamAdmin`. After the protected Terraform workflow applies, it synchronizes the project, region, WIF provider, Cloud Build service account, and Cloud Build substitutions into `chiefvoice`. Change the DNS A record for `chiefvoice.elvoryx.in` to the new `backend_external_ip`, then run the existing Deploy to GCP workflow manually. That Cloud Build run publishes images in Mumbai, deploys the post-call function in Mumbai, initializes the fresh database, and starts the app. The previous function in `us-central1` is outside this Terraform state and should be removed after confirming the Mumbai deployment works. The current Cloud Build pipeline still builds and serves the console on the VM; it does not deploy the frontend to Vercel.
-- Protect the Terraform remote state: it contains Secret Manager secret versions for the database password, Fernet keys, Vobiz secrets and HMAC object-storage credentials, as well as the rendered startup script. Runtime startup reads values from Secret Manager into root-only files; instance metadata contains secret IDs rather than those values.
+Run these read-only commands in Cloud Shell or an administrator workstation. They do not modify project resources or Terraform state:
+
+```sh
+gcloud auth login
+gcloud auth application-default login
+gcloud config set project chiefvoice-service
+
+gcloud projects describe chiefvoice-service \
+  --format='yaml(projectId,projectNumber,name,lifecycleState)'
+gcloud storage buckets describe gs://chiefvoice-tfstate-577933119654-8db79b617764 \
+  --format='yaml(name,location,projectNumber,uniformBucketLevelAccess,publicAccessPrevention,versioning)'
+gcloud storage ls gs://chiefvoice-tfstate-577933119654-8db79b617764/chiefvoice/prod/
+gcloud storage buckets describe gs://chiefvoice-service \
+  --format='yaml(name,location,projectNumber,uniformBucketLevelAccess,publicAccessPrevention,versioning)'
+gcloud iam workload-identity-pools describe chiefvoice-service \
+  --project=chiefvoice-service --location=global --format=yaml(name,state,disabled)
+gcloud iam workload-identity-pools providers describe github \
+  --project=chiefvoice-service --location=global \
+  --workload-identity-pool=chiefvoice-service \
+  --format='yaml(name,state,disabled,oidc,attributeMapping,attributeCondition)'
+gcloud iam service-accounts list --project=chiefvoice-service --format='value(email)'
+gcloud iam service-accounts get-iam-policy \
+  chiefvoice-github-deploy@chiefvoice-service.iam.gserviceaccount.com \
+  --project=chiefvoice-service --format=yaml(bindings)
+gcloud projects get-iam-policy chiefvoice-service \
+  --flatten='bindings[].members' \
+  --filter='bindings.members:serviceAccount:chiefvoice-github-deploy@chiefvoice-service.iam.gserviceaccount.com' \
+  --format='table(bindings.role,bindings.members)'
+```
+
+Treat `PERMISSION_DENIED` as **unknown**, not as proof a bucket or state is absent. The original candidate state bucket was unavailable globally. The replacement bucket above has been created and verified in `chiefvoice-service`; use this exact name consistently in Terraform backend configuration, variables, and GitHub variables.
+
+## 2. State bucket bootstrap and recovery
+
+The separate `gcp/state/` Terraform root uses local state and creates only the protected state bucket and Cloud Storage API enablement. Both have already been created and are tracked in the current Cloud Shell checkout's `gcp/state/terraform.tfstate`. Preserve that file. On a fresh checkout, import the existing resources into local bootstrap state instead of applying an empty plan:
+
+```sh
+terraform -chdir=gcp/state init
+terraform -chdir=gcp/state import \
+  google_project_service.storage_api chiefvoice-service/storage.googleapis.com
+terraform -chdir=gcp/state import \
+  google_storage_bucket.terraform_state chiefvoice-tfstate-577933119654-8db79b617764
+terraform -chdir=gcp/state state list
+```
+
+The bucket configuration enables uniform access, public access prevention, object versioning, `force_destroy = false`, and `prevent_destroy = true`. Do not run `terraform destroy` in this root. The main root grants the deployment service account state access only after that account exists.
+
+## 3. Configure the main Terraform inputs and backend
+
+After state ownership is resolved, create the local files from the examples and set the reviewed values. Keep `terraform.tfvars` and `backend.hcl` private and untracked:
+
+```sh
+cp gcp/backend.hcl.example gcp/backend.hcl
+cp gcp/terraform.tfvars.example gcp/terraform.tfvars
+```
+
+The example targets `chiefvoice-service`, `asia-south1`, and the existing bucket `chiefvoice-service` for application objects. Verify that bucket’s purpose and import it if it is the bucket to retain. The example state bucket name is the verified replacement above. Configure `public_domain`, OIDC settings, trusted platform-admin subjects, VM size, and other required values before planning. The output sync rejects empty or malformed Cloud Build substitutions, so configure the OIDC substitution values before syncing deployment configuration.
+
+Initialize the main backend using the created bucket and prefix `chiefvoice/prod`:
+
+```sh
+terraform -chdir=gcp init -backend-config=backend.hcl
+terraform -chdir=gcp state list
+```
+
+The new remote state was initially empty. Import the verified live WIF resources and any existing buckets before planning. If another state object or unexpected addresses appear, stop and reconcile ownership before proceeding. Terraform state contains secret material, including generated credentials and secret versions; never print it, commit it, or share it.
+
+If `gs://chiefvoice-service` is confirmed as the existing recordings/backups bucket and the main Terraform state does not already track `google_storage_bucket.objects`, import it rather than attempting to create a duplicate:
+
+```sh
+terraform -chdir=gcp import -var-file=terraform.tfvars \
+  google_storage_bucket.objects chiefvoice-service
+```
+
+This changes Terraform state only. Do not run it if the bucket purpose/owner is uncertain or the resource address is already tracked.
+
+## 4. Reconcile the existing WIF provider
+
+The intended provider is in project `chiefvoice-service`, pool `chiefvoice-service`, provider `github`. Its issuer is `https://token.actions.githubusercontent.com`; mappings are `google.subject = assertion.sub`, `attribute.repository = assertion.repository`, and `attribute.ref = assertion.ref`. The condition permits only `chiefxai/chiefvoice` and `chiefxai/chiefvoice-infra` on `refs/heads/main`. The pool/provider IDs are immutable identifiers, so Terraform uses the reported existing IDs and protects both resources from accidental destruction.
+
+After backend and state inspection, check whether these addresses already exist in state:
+
+```sh
+terraform -chdir=gcp state list | grep 'google_iam_workload_identity_pool'
+```
+
+If an address is absent and the live resource was verified, import it (these commands update Terraform state; they do not create/delete the GCP resource):
+
+```sh
+PROJECT_NUMBER="$(gcloud projects describe chiefvoice-service --format='value(projectNumber)')"
+terraform -chdir=gcp import -var-file=terraform.tfvars \
+  google_iam_workload_identity_pool.github \
+  "projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/chiefvoice-service"
+terraform -chdir=gcp import -var-file=terraform.tfvars \
+  google_iam_workload_identity_pool_provider.github \
+  "projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/chiefvoice-service/providers/github"
+```
+
+If either address is already tracked, do not import over it. Review `terraform state show` and the plan first. A project/state migration can require deliberate state moves/imports; any plan that destroys a pool, provider, service account, storage bucket, or data-bearing resource must be rejected until separately reviewed.
+
+The WIF service-account impersonation binding is `roles/iam.workloadIdentityUser` for each repository principal in the pool. The current deploy service account has broad Terraform administration roles, including project IAM administration. Those privileges are powerful; review the plan and IAM set before approval and reduce them where the Terraform resource set permits. No service-account keys are needed.
+
+## 5. Bootstrap using administrator ADC and review the plan
+
+GitHub Actions cannot authenticate until the provider, service account, and impersonation binding exist. The first main-root apply therefore must be run by an administrator using ADC, after state has been verified and the existing WIF resources have been reconciled. This task has not run an apply.
+
+```sh
+terraform -chdir=gcp plan -var-file=terraform.tfvars
+```
+
+Review every action, especially replacements or deletions. The main root creates the deployment service account and WIF bindings. Apply only after the state and plan are confirmed and separately approved:
+
+```sh
+terraform -chdir=gcp apply -var-file=terraform.tfvars
+```
+
+Then retrieve the output values without printing secret data:
+
+```sh
+terraform -chdir=gcp output -raw project_id
+terraform -chdir=gcp output -raw project_number
+terraform -chdir=gcp output -raw region
+terraform -chdir=gcp output -raw github_deploy_service_account
+terraform -chdir=gcp output -raw github_infra_terraform_service_account
+terraform -chdir=gcp output -raw github_workload_identity_provider
+terraform -chdir=gcp output -raw cloud_build_service_account
+```
+
+The WIF output is generated from the actual project number and Terraform-managed pool/provider IDs; do not hardcode a project number or provider path in workflows.
+
+## 6. Configure GitHub repositories
+
+In `chiefxai/chiefvoice-infra`, configure repository Actions variables:
+
+- `GCP_PROJECT_ID` = `chiefvoice-service`
+- `GCP_REGION` = `asia-south1`
+- `GCP_INFRA_TERRAFORM_SERVICE_ACCOUNT` = Terraform output `github_infra_terraform_service_account`
+- `GCP_WORKLOAD_IDENTITY_PROVIDER` = Terraform output `github_workload_identity_provider`
+- `GCP_TF_STATE_BUCKET` = the verified state bucket name
+- `GCP_TF_STATE_PREFIX` = `chiefvoice/prod`
+
+Configure repository secrets `GCP_TERRAFORM_TFVARS` (the reviewed Terraform variables file) and `GCP_TF_PLAN_ENCRYPTION_KEY`. In the protected `production` environment, configure required reviewers and secret `CHIEFVOICE_REPO_VARIABLES_TOKEN`, a fine-grained token limited to `chiefxai/chiefvoice` with Actions Variables write permission. Never print or commit these secrets.
+
+The sync workflow authenticates to GCP using `GCP_INFRA_TERRAFORM_SERVICE_ACCOUNT`, then reads Terraform outputs and writes six non-secret variables to `chiefxai/chiefvoice`: `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_GITHUB_DEPLOY_SERVICE_ACCOUNT`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_CLOUD_BUILD_SERVICE_ACCOUNT`, and `GCP_CLOUDBUILD_SUBSTITUTIONS_JSON`. The app deployment variable is sourced only from `github_deploy_service_account`; the Terraform service account is never sent to the app repository. The workflow validates all values before its first GitHub API write and is restricted to the infrastructure repository’s `main` branch.
+
+## 7. Plan, apply, and deploy
+
+After the ADC bootstrap and GitHub variable setup, use `.github/workflows/terraform-apply-gcp.yml` from `main` for routine changes. Inspect the generated plan and approve only after reviewing all resource actions. The `terraform-gcp-region.yml` workflow is a separate data-discard migration workflow; it must not be used as a shortcut for project correction. The CI workflows never replace the need to inspect the plan.
+
+Once infrastructure applies and output sync succeeds, verify that all six app repository variables are present without printing their values. Confirm DNS for the configured public domain points to the `backend_external_ip` output. Then run the `Deploy to GCP` workflow in `chiefxai/chiefvoice` on `main`. It authenticates through the synced WIF provider and Terraform-generated deployment service account, then submits the Cloud Build deployment.
+
+The Cloud Build pipeline builds the API and React console images, deploys the post-call function, runs migrations, and exposes API/console on the configured HTTPS domain. Post-call transcript review uses Cloud Speech-to-Text Chirp 2 in `asia-southeast1`. The VM-only `deploy.sh` path does not deploy changes under `deploy/gcp/post-call-function/`; use Cloud Build for those changes.
+
+For a manual VM connection after deployment:
+
+```sh
+gcloud compute ssh chiefvoice-backend \
+  --project=chiefvoice-service --zone=asia-south1-a --tunnel-through-iap
+```
 
 ## VM sizing
 
-The production VM defaults are configured in `gcp/terraform.tfvars` and supplied to GitHub Actions through the `GCP_TERRAFORM_TFVARS` secret:
-
-```hcl
-vm_machine_type = "e2-standard-2"
-vm_disk_gb      = 50
-```
-
-`e2-standard-2` provides 2 vCPUs and 8 GB of memory. The boot disk is a 50 GB SSD. Set `vm_machine_type` to choose a different predefined Compute Engine size; CPU and memory are selected together by that machine type. Set `vm_disk_gb` to change boot-disk capacity. After changing the secret, run **Apply GCP infrastructure**, inspect the plan, and approve the apply. Google’s [Compute Engine machine type table](https://cloud.google.com/compute/docs/general-purpose-machines#e2_machine_types) lists available sizes.
-
-## Apply and deploy
-
-```sh
-cd gcp
-terraform init -backend-config=backend.hcl
-terraform plan -var-file=terraform.tfvars
-terraform apply -var-file=terraform.tfvars
-```
-
-Use the protected `terraform-apply-gcp.yml` workflow for routine infrastructure changes so the matching app repository variables are synchronized. A direct local apply does not update GitHub variables automatically.
-
-Terraform reserves a regional static IP; point DNS to the `backend_external_ip` output. VM startup installs Docker, PostgreSQL, Caddy and the Google Cloud CLI, configures Artifact Registry authentication, and starts PostgreSQL. Cloud Build publishes the API image, deploys the post-call function with the Serverless VPC Access connector, binds `roles/run.invoker` only to the Cloud Tasks OIDC service account, obtains the HTTPS function URL, connects to the VM through IAP, waits for PostgreSQL readiness, runs `alembic upgrade head` using the same new image, then starts API and Caddy. The function uses a secret database URL targeting the VM's private address; the connector-only firewall rule allows its PostgreSQL traffic.
-
-Cloud Build builds the API and React console images, deploys the post-call function, applies migrations, and exposes the API and console together on the same HTTPS domain. It also runs unit tests, lint, compilation and public `/healthz`, `/readyz` and `/metrics` probes. The GitHub deployment workflow submits these Cloud Builds after Terraform has created the VM, Artifact Registry repository, connector, queue and service accounts. Later builds repeat migrations under an instance-local deployment lock and only expose the API after migration succeeds.
-
-Post-call transcript review uses Cloud Speech-to-Text Chirp 2 in `asia-southeast1` when the primary transcript needs review. Terraform enables `speech.googleapis.com` and grants the post-call function service account `roles/speech.client` in the hosting project. To use another supported model or region, set `post_call_transcription_model` or `post_call_transcription_location` in `terraform.tfvars`, apply Terraform through the protected workflow; it synchronizes the updated `cloud_build_substitutions` to the app repository and the deploy workflow passes them to Cloud Build. Cloud Speech usage is billed separately from Vertex AI.
-
-For a manual VM-only deployment (for example, a change confined to the API or console), SSH to the VM and run the repository script. The VM startup installs Docker but may not install Git, so install it if needed. Keep the checkout beside `/opt/chiefvoice/compose.yaml`; the script uses that compose directory for the running services:
-
-```sh
-gcloud compute ssh chiefvoice-backend --project=chief-502717 --zone=asia-south1-a --tunnel-through-iap
-sudo apt-get update && sudo apt-get install -y git # only if git is missing
-sudo git clone https://github.com/chiefxai/chiefvoice.git /opt/chiefvoice/source # first deployment only
-cd /opt/chiefvoice/source
-sudo bash deploy.sh main
-```
-
-For later deployments, run `cd /opt/chiefvoice/source && sudo bash deploy.sh main`. The script fast-forwards to `origin/main`, builds the API and console images on the VM, applies migrations, restarts the services, and checks the public health endpoint. It shares the VM deployment lock with Cloud Build, so concurrent deployments wait for each other. This VM-only path does not deploy changes under `deploy/gcp/post-call-function/`; use Cloud Build for those changes or for the full production validation sequence. Frontend OIDC build values can be overridden with `VITE_OIDC_AUTHORITY`, `VITE_OIDC_CLIENT_ID`, `VITE_OIDC_AUDIENCE`, and `VITE_OIDC_SCOPE`; `HEALTHCHECK_URL` changes the final health probe.
-
-For Auth0, configure an API audience (for example `https://chiefvoice.elvoryx.in/api`) and a single-page application whose allowed callback and web origin are `https://chiefvoice.elvoryx.in`. Create an Auth0 Action that adds the configured namespaced tenant claim (default `https://chiefvoice.elvoryx.in/tenant_id`) to access tokens. Request the `platform:customers:read` and `platform:customers:write` API permissions. Set the OIDC authority, client ID, issuer, audience, JWKS URL, and your Auth0 user `sub` in `terraform.tfvars`; the output carries the console settings into Cloud Build on the next app deployment.
+The Terraform example uses an `e2-standard-2` VM (2 vCPUs, 8 GB RAM) and a 50 GB boot disk. Set `vm_machine_type` and `vm_disk_gb` in the reviewed variables file, then inspect the protected workflow plan before applying.
 
 ## Backup and restore
 
-The API periodically takes service-scoped PostgreSQL backups with `pg_dump`, encrypts the archive using the dedicated `BACKUP_ENCRYPTION_KEY`, and stores the encrypted object in the private bucket. Policy is one day interval and 30 day retention. The VM service account has object access; the bucket enforces uniform access and public access prevention. Backups require no extra host cron job because the API's backup runner performs the scheduled work.
+The API takes service-scoped PostgreSQL backups with `pg_dump`, encrypts each archive, and stores it in the private object bucket. The VM service account has object access. Check a restore only into a disposable database using `sudo chiefvoice-backup-restore-check`; never restore over production data.
 
-Check a restore by running `sudo chiefvoice-backup-restore-check` on the VM. It creates a disposable database, verifies and decrypts the newest backup into it, and drops that database on exit. Confirm the `restore_verified` log line and then verify the restored database schema/data before treating a backup as usable. Never restore to the production database. The container image includes PostgreSQL 16 client tools used by the backup and restore provider.
-
-The backend endpoint is `https://<public_domain>`. Cloud Tasks queue retries are bounded by its configured retry policy; monitor Cloud Logging and the queue's oldest task age / retry metrics. `../scalable-gcp` retains the older Cloud Run and Cloud SQL design and is not active.
-
-
-## Repository layout
-
-This repository owns the GCP Terraform root and its manual regional migration workflow. The application and Cloud Build deployment pipeline remain in [`chiefxai/chiefvoice`](https://github.com/chiefxai/chiefvoice); the application repository trusts this repository through the `github_infra_repository` Workload Identity Federation condition. Apply the Terraform change that adds this repository to the provider before using GitHub Actions here for the first time. Until that trust is applied, use an administrator workstation or Cloud Shell with Terraform and ADC to apply the updated configuration.
+The GCS Terraform state includes generated secrets and rendered startup configuration. Protect its access and version history. The older `../scalable-gcp` Cloud Run/Cloud SQL design is not active.
