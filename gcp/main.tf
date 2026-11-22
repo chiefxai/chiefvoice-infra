@@ -517,10 +517,11 @@ resource "google_service_account_iam_member" "cloud_build_backend_act_as" {
 }
 
 resource "google_compute_instance" "backend" {
-  name         = "chiefvoice-backend"
-  machine_type = var.vm_machine_type
-  zone         = var.zone
-  tags         = ["chiefvoice-backend"]
+  name                = "chiefvoice-backend"
+  machine_type        = var.vm_machine_type
+  zone                = var.zone
+  tags                = ["chiefvoice-backend"]
+  deletion_protection = true
   boot_disk {
     initialize_params {
       # Keep the running VM on its current image; changing the image forces replacement.
