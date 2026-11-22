@@ -95,12 +95,16 @@ resource "google_vpc_access_connector" "functions" {
 
 resource "google_storage_bucket" "objects" {
   name                        = var.object_storage_bucket_name
+  project                     = var.project_id
   location                    = var.region
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
-  # Regional migration intentionally replaces this bucket; old recordings and backups may be discarded.
-  force_destroy               = true
+  force_destroy               = false
   labels                      = var.labels
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 resource "google_artifact_registry_repository" "images" {
   location      = var.region
@@ -134,17 +138,22 @@ data "google_project" "current" {
   project_id = var.project_id
 }
 resource "google_iam_workload_identity_pool" "github" {
-  workload_identity_pool_id = "github-actions"
+  workload_identity_pool_id = "chiefvoice-service"
   display_name              = "GitHub Actions"
   description               = "Federation for the Chiefvoice application and infrastructure repositories"
   disabled                  = false
   depends_on                = [google_project_service.apis]
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 resource "google_iam_workload_identity_pool_provider" "github" {
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
-  workload_identity_pool_provider_id = "chiefvoice-production"
+  workload_identity_pool_provider_id = "github"
   display_name                       = "Chiefvoice production repositories"
   description                        = "Only the main branches of the Chiefvoice app and infrastructure repositories may federate"
+  disabled                           = false
   attribute_mapping = {
     "google.subject"       = "assertion.sub"
     "attribute.repository" = "assertion.repository"
@@ -153,6 +162,10 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   attribute_condition = "(assertion.repository == '${var.github_repository}' || assertion.repository == '${var.github_infra_repository}') && assertion.ref == 'refs/heads/main'"
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
+  }
+
+  lifecycle {
+    prevent_destroy = true
   }
 }
 resource "google_service_account_iam_member" "github_deploy_wif" {

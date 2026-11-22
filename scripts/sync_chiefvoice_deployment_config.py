@@ -23,7 +23,7 @@ _REGION = re.compile(r"^[a-z]+-[a-z0-9]+[0-9]$")
 _SERVICE_ACCOUNT = re.compile(r"^[^@\s]+@[^@\s]+\.iam\.gserviceaccount\.com$")
 _SUBSTITUTION_KEY = re.compile(r"^_[A-Z0-9_]+$")
 _WORKLOAD_IDENTITY_PROVIDER = re.compile(
-    r"^projects/[1-9][0-9]*/locations/global/"
+    r"^projects/([1-9][0-9]*)/locations/global/"
     r"workloadIdentityPools/[a-z][a-z0-9-]{2,31}/providers/[a-z][a-z0-9-]{2,31}$"
 )
 
@@ -63,15 +63,28 @@ def validate_deployment_values(
     provider: str,
     cloud_build_service_account: str,
     substitutions: object,
+    github_deploy_service_account: str,
+    project_number: str,
 ) -> dict[str, str | int | float | bool]:
     if not _PROJECT_ID.fullmatch(project_id):
         raise RuntimeError("Terraform returned an invalid GCP project ID")
     if not _REGION.fullmatch(region):
         raise RuntimeError("Terraform returned an invalid GCP region")
-    if not _WORKLOAD_IDENTITY_PROVIDER.fullmatch(provider):
+    provider_match = _WORKLOAD_IDENTITY_PROVIDER.fullmatch(provider)
+    if provider_match is None:
         raise RuntimeError("Terraform returned an invalid Workload Identity Provider resource name")
+    if not project_number.isdigit() or project_number.startswith("0"):
+        raise RuntimeError("Terraform returned an invalid GCP project number")
+    if provider_match.group(1) != project_number:
+        raise RuntimeError("Terraform Workload Identity Provider belongs to a different project")
     if not _SERVICE_ACCOUNT.fullmatch(cloud_build_service_account):
         raise RuntimeError("Terraform returned an invalid Cloud Build service account")
+    if not _SERVICE_ACCOUNT.fullmatch(github_deploy_service_account):
+        raise RuntimeError("Terraform returned an invalid GitHub deploy service account")
+    if not github_deploy_service_account.endswith(f"@{project_id}.iam.gserviceaccount.com"):
+        raise RuntimeError("Terraform GitHub deploy service account belongs to a different project")
+    if not cloud_build_service_account.endswith(f"@{project_id}.iam.gserviceaccount.com"):
+        raise RuntimeError("Terraform Cloud Build service account belongs to a different project")
     if not isinstance(substitutions, dict) or not substitutions:
         raise RuntimeError("Terraform returned an empty Cloud Build substitutions map")
 
@@ -98,6 +111,8 @@ def main() -> None:
     region = required_env("GCP_REGION")
     provider = required_env("GCP_WORKLOAD_IDENTITY_PROVIDER")
     cloud_build_service_account = required_env("GCP_CLOUD_BUILD_SERVICE_ACCOUNT")
+    github_deploy_service_account = required_env("GCP_GITHUB_DEPLOY_SERVICE_ACCOUNT")
+    project_number = required_env("GCP_PROJECT_NUMBER")
     substitutions_path = Path(required_env("CLOUDBUILD_SUBSTITUTIONS_FILE"))
     substitutions = json.loads(substitutions_path.read_text(encoding="utf-8"))
     substitutions = validate_deployment_values(
@@ -106,6 +121,8 @@ def main() -> None:
         provider,
         cloud_build_service_account,
         substitutions,
+        github_deploy_service_account,
+        project_number,
     )
 
     values = {
@@ -113,6 +130,7 @@ def main() -> None:
         "GCP_REGION": region,
         "GCP_WORKLOAD_IDENTITY_PROVIDER": provider,
         "GCP_CLOUD_BUILD_SERVICE_ACCOUNT": cloud_build_service_account,
+        "GCP_GITHUB_DEPLOY_SERVICE_ACCOUNT": github_deploy_service_account,
         "GCP_CLOUDBUILD_SUBSTITUTIONS_JSON": json.dumps(
             substitutions, sort_keys=True, separators=(",", ":")
         ),

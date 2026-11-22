@@ -28,7 +28,7 @@ variable "vm_disk_gb" {
 variable "terraform_state_bucket_name" {
   type        = string
   default     = "chiefvoice-tfstate-297803100712"
-  description = "Existing GCS bucket used by the infra/gcp Terraform backend."
+  description = "Candidate GCS state bucket; verify its project ownership and state before use."
 }
 variable "object_storage_bucket_name" { type = string }
 variable "public_domain" {

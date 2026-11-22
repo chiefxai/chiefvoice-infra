@@ -9,20 +9,20 @@ terraform {
 }
 
 provider "google" {
-  project = "chief-502717"
-  region  = "us-central1"
+  project = var.project_id
+  region  = var.region
 }
 
 resource "google_project_service" "storage_api" {
-  project            = "chief-502717"
+  project            = var.project_id
   service            = "storage.googleapis.com"
   disable_on_destroy = false
 }
 
 resource "google_storage_bucket" "terraform_state" {
-  name                        = "chiefvoice-tfstate-297803100712"
-  project                     = "chief-502717"
-  location                    = "us-central1"
+  name                        = var.terraform_state_bucket_name
+  project                     = var.project_id
+  location                    = var.region
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
   force_destroy               = false
