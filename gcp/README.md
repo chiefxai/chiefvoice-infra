@@ -6,11 +6,11 @@ The deployment runs the API and PostgreSQL on a Compute Engine VM. Cloud Tasks q
 
 ## Safety gates before initialization
 
-The candidate Terraform state bucket is `gs://chiefvoice-tfstate-297803100712`. Its existence, owner, and contents have **not** been verified. Do not run `terraform init` against it, bootstrap it, or choose a replacement until the checks below establish whether an existing state is present. The GCS backend requires a pre-existing bucket, and object versioning is recommended for state recovery ([Terraform GCS backend documentation](https://developer.hashicorp.com/terraform/language/backend/gcs)).
+The dedicated Terraform state bucket is `gs://chiefvoice-tfstate-577933119654-8db79b617764` in `ASIA-SOUTH1`, with uniform access, public access prevention, and versioning. The original candidate name was unavailable globally. The bucket was created through `gcp/state/`; preserve that root's local `terraform.tfstate` file in the Cloud Shell checkout. The main `gcp/` backend is initialized to this bucket with prefix `chiefvoice/prod`. Check its state addresses before importing any resources.
 
 The target project already has a WIF pool `chiefvoice-service` and provider `github`, according to the current administrator report. The provider currently has an incorrect issuer and incomplete attribute mapping. Terraform now declares these exact resource IDs with the GitHub Actions issuer and restrictive repository/branch condition. Import the existing resources into the verified Terraform state before planning; do not create duplicate pools/providers or remove the existing resources.
 
-The currently configured remote state may belong to the previous project. Do not change the backend or create another state until the old bucket and state object are located and reviewed. The storage bucket `gs://chiefvoice` was also reported as existing; confirm its purpose and ownership before adopting it as the recordings/backups bucket. Destruction is disabled for Terraform-managed object and state buckets.
+The previously configured remote state could not be located in the projects visible to the administrator account. Existing WIF resources must be imported into the new main state before planning. Confirm the purpose of `gs://chiefvoice-service` before importing it as the recordings/backups bucket. Terraform manages the project-specific `${project_id}_cloudbuild` source bucket in the selected region; it is private and protected from destruction. Destruction is disabled for Terraform-managed state, object, and Cloud Build source buckets.
 
 ## 1. Authenticate and inspect existing state
 
@@ -23,10 +23,10 @@ gcloud config set project chiefvoice-service
 
 gcloud projects describe chiefvoice-service \
   --format='yaml(projectId,projectNumber,name,lifecycleState)'
-gcloud storage buckets describe gs://chiefvoice-tfstate-297803100712 \
+gcloud storage buckets describe gs://chiefvoice-tfstate-577933119654-8db79b617764 \
   --format='yaml(name,location,projectNumber,uniformBucketLevelAccess,publicAccessPrevention,versioning)'
-gcloud storage ls gs://chiefvoice-tfstate-297803100712/chiefvoice/prod/
-gcloud storage buckets describe gs://chiefvoice \
+gcloud storage ls gs://chiefvoice-tfstate-577933119654-8db79b617764/chiefvoice/prod/
+gcloud storage buckets describe gs://chiefvoice-service \
   --format='yaml(name,location,projectNumber,uniformBucketLevelAccess,publicAccessPrevention,versioning)'
 gcloud iam workload-identity-pools describe chiefvoice-service \
   --project=chiefvoice-service --location=global --format=yaml(name,state,disabled)
@@ -44,30 +44,22 @@ gcloud projects get-iam-policy chiefvoice-service \
   --format='table(bindings.role,bindings.members)'
 ```
 
-Treat `PERMISSION_DENIED` as **unknown**, not as proof a bucket or state is absent. If the candidate state bucket is in another project, if it contains a state object, or if its owner cannot be established, stop and resolve access/state ownership before initializing Terraform. If no bucket exists, confirm globally that the candidate name is available. If it is unavailable, choose an administrator-approved globally unique name and use that same name in bootstrap variables, backend configuration, and GitHub variables.
+Treat `PERMISSION_DENIED` as **unknown**, not as proof a bucket or state is absent. The original candidate state bucket was unavailable globally. The replacement bucket above has been created and verified in `chiefvoice-service`; use this exact name consistently in Terraform backend configuration, variables, and GitHub variables.
 
-## 2. Bootstrap state only if absence is confirmed
+## 2. State bucket bootstrap and recovery
 
-The separate `gcp/state/` Terraform root uses local state and creates only the protected state bucket and Cloud Storage API enablement. Run this only after the preceding checks confirm the chosen bucket does not exist and no prior state needs recovery:
+The separate `gcp/state/` Terraform root uses local state and creates only the protected state bucket and Cloud Storage API enablement. Both have already been created and are tracked in the current Cloud Shell checkout's `gcp/state/terraform.tfstate`. Preserve that file. On a fresh checkout, import the existing resources into local bootstrap state instead of applying an empty plan:
 
 ```sh
 terraform -chdir=gcp/state init
-terraform -chdir=gcp/state plan \
-  -var=project_id=chiefvoice-service \
-  -var=region=asia-south1 \
-  -var=terraform_state_bucket_name=chiefvoice-tfstate-297803100712
-```
-
-Review the plan. The bucket configuration enables uniform access, public access prevention, object versioning, `force_destroy = false`, and `prevent_destroy = true`. After administrator approval, apply the reviewed bootstrap plan. Do not run `terraform destroy` in this root. The deployment service-account state access is declared in the main root and is granted only after that account exists.
-
-If the bucket exists in the target project but is not represented in bootstrap state, import it after backing up and reviewing the local bootstrap state:
-
-```sh
 terraform -chdir=gcp/state import \
-  google_storage_bucket.terraform_state chiefvoice-tfstate-297803100712
+  google_project_service.storage_api chiefvoice-service/storage.googleapis.com
+terraform -chdir=gcp/state import \
+  google_storage_bucket.terraform_state chiefvoice-tfstate-577933119654-8db79b617764
+terraform -chdir=gcp/state state list
 ```
 
-Do not import a bucket owned by another project. Do not use the candidate name in these commands until its ownership and state contents are confirmed.
+The bucket configuration enables uniform access, public access prevention, object versioning, `force_destroy = false`, and `prevent_destroy = true`. Do not run `terraform destroy` in this root. The main root grants the deployment service account state access only after that account exists.
 
 ## 3. Configure the main Terraform inputs and backend
 
@@ -78,23 +70,22 @@ cp gcp/backend.hcl.example gcp/backend.hcl
 cp gcp/terraform.tfvars.example gcp/terraform.tfvars
 ```
 
-The example targets `chiefvoice-service`, `asia-south1`, and the reported existing object bucket name `chiefvoice`. Verify that bucket’s purpose/contents and import it if it is the bucket to retain. The example state bucket name remains a candidate pending the checks above. Configure `public_domain`, OIDC settings, trusted platform-admin subjects, VM size, and other required values before planning. The output sync rejects empty or malformed Cloud Build substitutions, so configure the OIDC substitution values before syncing deployment configuration.
+The example targets `chiefvoice-service`, `asia-south1`, and the existing bucket `chiefvoice-service` for application objects. Verify that bucket’s purpose and import it if it is the bucket to retain. The example state bucket name is the verified replacement above. Configure `public_domain`, OIDC settings, trusted platform-admin subjects, VM size, and other required values before planning. The output sync rejects empty or malformed Cloud Build substitutions, so configure the OIDC substitution values before syncing deployment configuration.
 
-Only after the bucket and its state object have been verified, initialize the main backend using the verified bucket and prefix `chiefvoice/prod`:
+Initialize the main backend using the created bucket and prefix `chiefvoice/prod`:
 
 ```sh
-cd gcp
 terraform -chdir=gcp init -backend-config=backend.hcl
 terraform -chdir=gcp state list
 ```
 
-If the state is empty or has no known owner, stop; do not allow Terraform to create a second independent state. Back up the verified state securely before state imports or migration. Terraform state contains secret material, including generated credentials and secret versions; never print it, commit it, or share it.
+The new remote state was initially empty. Import the verified live WIF resources and any existing buckets before planning. If another state object or unexpected addresses appear, stop and reconcile ownership before proceeding. Terraform state contains secret material, including generated credentials and secret versions; never print it, commit it, or share it.
 
-If `gs://chiefvoice` is confirmed as the existing recordings/backups bucket and the main Terraform state does not already track `google_storage_bucket.objects`, import it rather than attempting to create a duplicate:
+If `gs://chiefvoice-service` is confirmed as the existing recordings/backups bucket and the main Terraform state does not already track `google_storage_bucket.objects`, import it rather than attempting to create a duplicate:
 
 ```sh
 terraform -chdir=gcp import -var-file=terraform.tfvars \
-  google_storage_bucket.objects chiefvoice
+  google_storage_bucket.objects chiefvoice-service
 ```
 
 This changes Terraform state only. Do not run it if the bucket purpose/owner is uncertain or the resource address is already tracked.
@@ -106,7 +97,6 @@ The intended provider is in project `chiefvoice-service`, pool `chiefvoice-servi
 After backend and state inspection, check whether these addresses already exist in state:
 
 ```sh
-cd gcp
 terraform -chdir=gcp state list | grep 'google_iam_workload_identity_pool'
 ```
 

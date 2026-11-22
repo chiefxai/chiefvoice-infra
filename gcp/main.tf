@@ -220,31 +220,43 @@ resource "google_storage_bucket_iam_member" "github_deploy_terraform_state" {
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.github_deploy.email}"
 }
-data "google_storage_bucket" "cloudbuild_source" {
-  name = "${var.project_id}_cloudbuild"
+resource "google_storage_bucket" "cloudbuild_source" {
+  name                        = "${var.project_id}_cloudbuild"
+  project                     = var.project_id
+  location                    = var.region
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  force_destroy               = false
+  labels                      = var.labels
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  depends_on = [google_project_service.apis]
 }
 resource "google_storage_bucket_iam_member" "github_deploy_cloudbuild_bucket_viewer" {
-  bucket = data.google_storage_bucket.cloudbuild_source.name
+  bucket = google_storage_bucket.cloudbuild_source.name
   role   = "roles/storage.bucketViewer"
   member = "serviceAccount:${google_service_account.github_deploy.email}"
 }
 resource "google_storage_bucket_iam_member" "github_deploy_cloudbuild_source_creator" {
-  bucket = data.google_storage_bucket.cloudbuild_source.name
+  bucket = google_storage_bucket.cloudbuild_source.name
   role   = "roles/storage.objectCreator"
   member = "serviceAccount:${google_service_account.github_deploy.email}"
 }
 resource "google_storage_bucket_iam_member" "github_deploy_cloudbuild_source_viewer" {
-  bucket = data.google_storage_bucket.cloudbuild_source.name
+  bucket = google_storage_bucket.cloudbuild_source.name
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_service_account.github_deploy.email}"
 }
 resource "google_storage_bucket_iam_member" "cloud_build_cloudbuild_bucket_viewer" {
-  bucket = data.google_storage_bucket.cloudbuild_source.name
+  bucket = google_storage_bucket.cloudbuild_source.name
   role   = "roles/storage.bucketViewer"
   member = "serviceAccount:${google_service_account.cloud_build.email}"
 }
 resource "google_storage_bucket_iam_member" "cloud_build_cloudbuild_object_user" {
-  bucket = data.google_storage_bucket.cloudbuild_source.name
+  bucket = google_storage_bucket.cloudbuild_source.name
   role   = "roles/storage.objectUser"
   member = "serviceAccount:${google_service_account.cloud_build.email}"
 }

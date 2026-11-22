@@ -10,6 +10,6 @@ variable "region" {
 
 variable "terraform_state_bucket_name" {
   type        = string
-  default     = "chiefvoice-tfstate-297803100712"
-  description = "Candidate state bucket name; verify its existence, owner, and contents before bootstrap."
+  default     = "chiefvoice-tfstate-577933119654-8db79b617764"
+  description = "Protected Terraform state bucket in chiefvoice-service."
 }
